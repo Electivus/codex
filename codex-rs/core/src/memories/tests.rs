@@ -428,6 +428,7 @@ mod phase2 {
     use codex_config::Constrained;
     use codex_login::CodexAuth;
     use codex_protocol::ThreadId;
+    use codex_protocol::openai_models::ReasoningEffort;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::Op;
     use codex_protocol::protocol::SandboxPolicy;
@@ -466,9 +467,8 @@ mod phase2 {
     }
 
     impl DispatchHarness {
-        async fn new() -> Self {
+        async fn with_config(mut config: Config) -> Self {
             let codex_home = tempfile::tempdir().expect("create temp codex home");
-            let mut config = test_config();
             config.codex_home = codex_home.path().to_path_buf();
             config.cwd = config.codex_home.abs();
             let config = Arc::new(config);
@@ -499,6 +499,10 @@ mod phase2 {
                 manager,
                 state_db,
             }
+        }
+
+        async fn new() -> Self {
+            Self::with_config(test_config()).await
         }
 
         async fn seed_stage1_output(&self, source_updated_at: i64) {
@@ -716,6 +720,31 @@ mod phase2 {
         .await
         .expect("timed out waiting for consolidation thread memory mode to persist");
         pretty_assertions::assert_eq!(memory_mode.as_deref(), Some("disabled"));
+
+        harness.shutdown_threads().await;
+    }
+
+    #[tokio::test]
+    async fn dispatch_uses_configured_consolidation_reasoning_effort() {
+        let mut config = test_config();
+        config.memories.consolidation_reasoning_effort = ReasoningEffort::High;
+        let harness = DispatchHarness::with_config(config).await;
+        harness.seed_stage1_output(Utc::now().timestamp()).await;
+
+        phase2::run(&harness.session, Arc::clone(&harness.config)).await;
+
+        let thread_ids = harness.manager.list_thread_ids().await;
+        pretty_assertions::assert_eq!(thread_ids.len(), 1);
+        let subagent = harness
+            .manager
+            .get_thread(thread_ids[0])
+            .await
+            .expect("get consolidation thread");
+        let config_snapshot = subagent.config_snapshot().await;
+        pretty_assertions::assert_eq!(
+            config_snapshot.reasoning_effort,
+            Some(ReasoningEffort::High)
+        );
 
         harness.shutdown_threads().await;
     }

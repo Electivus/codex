@@ -336,7 +336,8 @@ mod agent {
                 .clone()
                 .unwrap_or(phase_two::MODEL.to_string()),
         );
-        agent_config.model_reasoning_effort = Some(phase_two::REASONING_EFFORT);
+        agent_config.model_reasoning_effort =
+            Some(config.memories.consolidation_reasoning_effort);
 
         Some(agent_config)
     }
