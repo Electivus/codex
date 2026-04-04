@@ -1,12 +1,28 @@
+use super::build_request_context;
 use super::JobOutcome;
 use super::JobResult;
 use super::aggregate_stats;
 use super::job::serialize_filtered_rollout_response_items;
+use crate::codex::make_session_and_context;
+use crate::config::test_config;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::TokenUsage;
 use pretty_assertions::assert_eq;
+use std::sync::Arc;
+
+#[tokio::test]
+async fn build_request_context_uses_memories_extract_reasoning_effort() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let mut config = test_config();
+    config.memories.extract_reasoning_effort = ReasoningEffort::High;
+
+    let context = build_request_context(&Arc::new(session), &config).await;
+
+    assert_eq!(context.reasoning_effort, Some(ReasoningEffort::High));
+}
 
 #[test]
 fn serializes_memory_rollout_with_agents_removed_but_environment_kept() {
