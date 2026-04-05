@@ -129,7 +129,7 @@ jobs:
     name: Argument comment lint - ${{ matrix.name }}
     # Forks do not have access to the private `codex-runners` group used for
     # Windows coverage in the canonical repository.
-    runs-on: ${{ matrix.openai_runs_on && github.repository == 'openai/codex' && fromJSON(matrix.openai_runs_on) || matrix.github_runner }}
+    runs-on: ${{ (github.repository == 'openai/codex' && matrix.openai_runs_on && fromJSON(matrix.openai_runs_on)) || (github.repository == 'openai/codex' && matrix.openai_github_runner) || matrix.github_runner }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     needs: changed
     if: ${{ needs.changed.outputs.argument_comment_lint == 'true' || needs.changed.outputs.workflows == 'true' }}
@@ -141,7 +141,8 @@ jobs:
             github_runner: ubuntu-24.04
             timeout_minutes: 30
           - name: macOS
-            github_runner: macos-15-xlarge
+            github_runner: macos-15
+            openai_github_runner: macos-15-xlarge
             timeout_minutes: 30
           - name: Windows
             github_runner: windows-latest
