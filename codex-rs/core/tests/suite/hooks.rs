@@ -14,27 +14,34 @@ use codex_protocol::protocol::RolloutLine;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_message_item_added;
 use core_test_support::responses::ev_output_text_delta;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
+use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
+use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::time::Duration;
 use tokio::sync::oneshot;
+use tokio::time::Instant;
 use tokio::time::sleep;
 
 const FIRST_CONTINUATION_PROMPT: &str = "Retry with exactly the phrase meow meow meow.";
 const SECOND_CONTINUATION_PROMPT: &str = "Now tighten it to just: meow.";
 const BLOCKED_PROMPT_CONTEXT: &str = "Remember the blocked lighthouse note.";
+const SPAWN_AGENT_CALL_ID: &str = "spawn-call-1";
+const SPAWN_CHILD_PROMPT: &str = "spawn a child and continue";
+const CHILD_PROMPT: &str = "child: inspect hook";
 
 fn write_stop_hook(home: &Path, block_prompts: &[&str]) -> Result<()> {
     let script_path = home.join("stop_hook.py");
@@ -309,7 +316,7 @@ elif mode == "exit_2":
     Ok(())
 }
 
-fn write_session_start_hook_recording_transcript(home: &Path) -> Result<()> {
+fn write_session_start_hook_recording_transcript(home: &Path, allow_subagent: bool) -> Result<()> {
     let script_path = home.join("session_start_hook.py");
     let log_path = home.join("session_start_hook_log.jsonl");
     let script = format!(
@@ -320,6 +327,7 @@ import sys
 payload = json.load(sys.stdin)
 transcript_path = payload.get("transcript_path")
 record = {{
+    "session_id": payload.get("session_id"),
     "transcript_path": transcript_path,
     "exists": Path(transcript_path).exists() if transcript_path else False,
 }}
@@ -335,6 +343,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
                 "hooks": [{
                     "type": "command",
                     "command": format!("python3 {}", script_path.display()),
+                    "allowSubagent": allow_subagent,
                     "statusMessage": "running session start hook",
                 }]
             }]
@@ -456,6 +465,59 @@ fn request_message_input_texts(body: &[u8], role: &str) -> Vec<String> {
         .filter(|span| span.get("type").and_then(Value::as_str) == Some("input_text"))
         .filter_map(|span| span.get("text").and_then(Value::as_str).map(str::to_owned))
         .collect()
+}
+
+fn body_contains(req: &wiremock::Request, text: &str) -> bool {
+    let is_zstd = req
+        .headers
+        .get("content-encoding")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(',')
+                .any(|entry| entry.trim().eq_ignore_ascii_case("zstd"))
+        });
+    let bytes = if is_zstd {
+        zstd::stream::decode_all(std::io::Cursor::new(&req.body)).ok()
+    } else {
+        Some(req.body.clone())
+    };
+    bytes
+        .and_then(|body| String::from_utf8(body).ok())
+        .is_some_and(|body| body.contains(text))
+}
+
+async fn wait_for_spawned_thread_id(test: &TestCodex) -> Result<String> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let ids = test.thread_manager.list_thread_ids().await;
+        if let Some(spawned_id) = ids
+            .iter()
+            .find(|id| **id != test.session_configured.session_id)
+        {
+            return Ok(spawned_id.to_string());
+        }
+        if Instant::now() >= deadline {
+            anyhow::bail!("timed out waiting for spawned thread id");
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
+}
+
+async fn wait_for_requests(
+    mock: &core_test_support::responses::ResponseMock,
+) -> Result<Vec<core_test_support::responses::ResponsesRequest>> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let requests = mock.requests();
+        if !requests.is_empty() {
+            return Ok(requests);
+        }
+        if Instant::now() >= deadline {
+            anyhow::bail!("expected at least 1 request, got {}", requests.len());
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -589,7 +651,9 @@ async fn session_start_hook_sees_materialized_transcript_path() -> Result<()> {
 
     let mut builder = test_codex()
         .with_pre_build_hook(|home| {
-            if let Err(error) = write_session_start_hook_recording_transcript(home) {
+            if let Err(error) =
+                write_session_start_hook_recording_transcript(home, /*allow_subagent*/ true)
+            {
                 panic!("failed to write session start hook test fixture: {error}");
             }
         })
@@ -613,6 +677,89 @@ async fn session_start_hook_sees_materialized_transcript_path() -> Result<()> {
         Some(false)
     );
     assert_eq!(hook_inputs[0].get("exists"), Some(&Value::Bool(true)));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn session_start_hook_allow_subagent_false_skips_spawned_subagent() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let spawn_args = serde_json::to_string(&serde_json::json!({
+        "message": CHILD_PROMPT,
+    }))?;
+    let _parent_turn = mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, SPAWN_CHILD_PROMPT),
+        sse(vec![
+            ev_response_created("resp-parent-1"),
+            ev_function_call(SPAWN_AGENT_CALL_ID, "spawn_agent", &spawn_args),
+            ev_completed("resp-parent-1"),
+        ]),
+    )
+    .await;
+    let child_turn = mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| {
+            body_contains(req, CHILD_PROMPT) && !body_contains(req, SPAWN_AGENT_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("resp-child-1"),
+            ev_assistant_message("msg-child-1", "child done"),
+            ev_completed("resp-child-1"),
+        ]),
+    )
+    .await;
+    let _parent_follow_up = mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, SPAWN_AGENT_CALL_ID),
+        sse(vec![
+            ev_response_created("resp-parent-2"),
+            ev_assistant_message("msg-parent-2", "parent done"),
+            ev_completed("resp-parent-2"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) =
+                write_session_start_hook_recording_transcript(home, /*allow_subagent*/ false)
+            {
+                panic!("failed to write session start hook test fixture: {error}");
+            }
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn(SPAWN_CHILD_PROMPT).await?;
+
+    let child_requests = wait_for_requests(&child_turn).await?;
+    let spawned_id = wait_for_spawned_thread_id(&test).await?;
+    assert_eq!(child_requests.len(), 1);
+
+    let hook_inputs = read_session_start_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(
+        hook_inputs[0].get("session_id"),
+        Some(&Value::String(
+            test.session_configured.session_id.to_string()
+        ))
+    );
+    assert_ne!(
+        hook_inputs[0].get("session_id").and_then(Value::as_str),
+        Some(spawned_id.as_str())
+    );
 
     Ok(())
 }

@@ -33,6 +33,7 @@ pub(crate) struct ConfiguredHandler {
     pub matcher: Option<String>,
     pub command: String,
     pub timeout_sec: u64,
+    pub allow_subagent: bool,
     pub status_message: Option<String>,
     pub source_path: PathBuf,
     pub display_order: i64,

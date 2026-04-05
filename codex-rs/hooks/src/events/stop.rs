@@ -28,6 +28,7 @@ pub struct StopRequest {
     pub permission_mode: String,
     pub stop_hook_active: bool,
     pub last_assistant_message: Option<String>,
+    pub is_subagent: bool,
 }
 
 #[derive(Debug)]
@@ -51,12 +52,17 @@ struct StopHandlerData {
 
 pub(crate) fn preview(
     handlers: &[ConfiguredHandler],
-    _request: &StopRequest,
+    request: &StopRequest,
 ) -> Vec<HookRunSummary> {
-    dispatcher::select_handlers(handlers, HookEventName::Stop, /*matcher_input*/ None)
-        .into_iter()
-        .map(|handler| dispatcher::running_summary(&handler))
-        .collect()
+    dispatcher::select_handlers(
+        handlers,
+        HookEventName::Stop,
+        /*matcher_input*/ None,
+        request.is_subagent,
+    )
+    .into_iter()
+    .map(|handler| dispatcher::running_summary(&handler))
+    .collect()
 }
 
 pub(crate) async fn run(
@@ -64,8 +70,12 @@ pub(crate) async fn run(
     shell: &CommandShell,
     request: StopRequest,
 ) -> StopOutcome {
-    let matched =
-        dispatcher::select_handlers(handlers, HookEventName::Stop, /*matcher_input*/ None);
+    let matched = dispatcher::select_handlers(
+        handlers,
+        HookEventName::Stop,
+        /*matcher_input*/ None,
+        request.is_subagent,
+    );
     if matched.is_empty() {
         return StopOutcome {
             hook_events: Vec::new(),
@@ -525,6 +535,7 @@ mod tests {
             matcher: None,
             command: "echo hook".to_string(),
             timeout_sec: 600,
+            allow_subagent: true,
             status_message: None,
             source_path: PathBuf::from("/tmp/hooks.json"),
             display_order: 0,

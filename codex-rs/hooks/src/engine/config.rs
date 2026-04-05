@@ -1,5 +1,9 @@
 use serde::Deserialize;
 
+fn default_allow_subagent() -> bool {
+    true
+}
+
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct HooksFile {
     #[serde(default)]
@@ -40,9 +44,17 @@ pub(crate) enum HookHandlerConfig {
         r#async: bool,
         #[serde(default, rename = "statusMessage")]
         status_message: Option<String>,
+        #[serde(default = "default_allow_subagent", rename = "allowSubagent")]
+        allow_subagent: bool,
     },
     #[serde(rename = "prompt")]
-    Prompt {},
+    Prompt {
+        #[serde(default = "default_allow_subagent", rename = "allowSubagent")]
+        allow_subagent: bool,
+    },
     #[serde(rename = "agent")]
-    Agent {},
+    Agent {
+        #[serde(default = "default_allow_subagent", rename = "allowSubagent")]
+        allow_subagent: bool,
+    },
 }

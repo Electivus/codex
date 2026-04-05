@@ -39,6 +39,7 @@ pub struct SessionStartRequest {
     pub model: String,
     pub permission_mode: String,
     pub source: SessionStartSource,
+    pub is_subagent: bool,
 }
 
 #[derive(Debug)]
@@ -64,6 +65,7 @@ pub(crate) fn preview(
         handlers,
         HookEventName::SessionStart,
         Some(request.source.as_str()),
+        request.is_subagent,
     )
     .into_iter()
     .map(|handler| dispatcher::running_summary(&handler))
@@ -80,6 +82,7 @@ pub(crate) async fn run(
         handlers,
         HookEventName::SessionStart,
         Some(request.source.as_str()),
+        request.is_subagent,
     );
     if matched.is_empty() {
         return SessionStartOutcome {
@@ -356,6 +359,7 @@ mod tests {
             matcher: None,
             command: "echo hook".to_string(),
             timeout_sec: 600,
+            allow_subagent: true,
             status_message: None,
             source_path: PathBuf::from("/tmp/hooks.json"),
             display_order: 0,

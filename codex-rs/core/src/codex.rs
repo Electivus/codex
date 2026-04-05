@@ -6156,6 +6156,10 @@ pub(crate) async fn run_turn(
                         permission_mode: stop_hook_permission_mode,
                         stop_hook_active,
                         last_assistant_message: last_agent_message.clone(),
+                        is_subagent: matches!(
+                            turn_context.session_source,
+                            SessionSource::SubAgent(_)
+                        ),
                     };
                     for run in sess.hooks().preview_stop(&stop_request) {
                         sess.send_event(

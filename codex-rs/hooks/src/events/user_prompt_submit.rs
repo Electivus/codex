@@ -26,6 +26,7 @@ pub struct UserPromptSubmitRequest {
     pub model: String,
     pub permission_mode: String,
     pub prompt: String,
+    pub is_subagent: bool,
 }
 
 #[derive(Debug)]
@@ -45,12 +46,13 @@ struct UserPromptSubmitHandlerData {
 
 pub(crate) fn preview(
     handlers: &[ConfiguredHandler],
-    _request: &UserPromptSubmitRequest,
+    request: &UserPromptSubmitRequest,
 ) -> Vec<HookRunSummary> {
     dispatcher::select_handlers(
         handlers,
         HookEventName::UserPromptSubmit,
         /*matcher_input*/ None,
+        request.is_subagent,
     )
     .into_iter()
     .map(|handler| dispatcher::running_summary(&handler))
@@ -66,6 +68,7 @@ pub(crate) async fn run(
         handlers,
         HookEventName::UserPromptSubmit,
         /*matcher_input*/ None,
+        request.is_subagent,
     );
     if matched.is_empty() {
         return UserPromptSubmitOutcome {
@@ -416,6 +419,7 @@ mod tests {
             matcher: None,
             command: "echo hook".to_string(),
             timeout_sec: 5,
+            allow_subagent: true,
             status_message: None,
             source_path: PathBuf::from("/tmp/hooks.json"),
             display_order: 0,
