@@ -27,6 +27,7 @@ pub struct PreToolUseRequest {
     pub tool_name: String,
     pub tool_use_id: String,
     pub command: String,
+    pub is_subagent: bool,
 }
 
 #[derive(Debug)]
@@ -50,6 +51,7 @@ pub(crate) fn preview(
         handlers,
         HookEventName::PreToolUse,
         Some(&request.tool_name),
+        request.is_subagent,
     )
     .into_iter()
     .map(|handler| dispatcher::running_summary(&handler))
@@ -65,6 +67,7 @@ pub(crate) async fn run(
         handlers,
         HookEventName::PreToolUse,
         Some(&request.tool_name),
+        request.is_subagent,
     );
     if matched.is_empty() {
         return PreToolUseOutcome {
@@ -459,6 +462,7 @@ mod tests {
             matcher: Some("^Bash$".to_string()),
             command: "echo hook".to_string(),
             timeout_sec: 5,
+            allow_subagent: true,
             status_message: None,
             source_path: PathBuf::from("/tmp/hooks.json"),
             display_order: 0,

@@ -26,10 +26,12 @@ pub(crate) fn select_handlers(
     handlers: &[ConfiguredHandler],
     event_name: HookEventName,
     matcher_input: Option<&str>,
+    is_subagent: bool,
 ) -> Vec<ConfiguredHandler> {
     handlers
         .iter()
         .filter(|handler| handler.event_name == event_name)
+        .filter(|handler| !is_subagent || handler.allow_subagent)
         .filter(|handler| match event_name {
             HookEventName::PreToolUse
             | HookEventName::PostToolUse
@@ -128,6 +130,7 @@ mod tests {
         event_name: HookEventName,
         matcher: Option<&str>,
         command: &str,
+        allow_subagent: bool,
         display_order: i64,
     ) -> ConfiguredHandler {
         ConfiguredHandler {
@@ -135,6 +138,7 @@ mod tests {
             matcher: matcher.map(str::to_owned),
             command: command.to_string(),
             timeout_sec: 5,
+            allow_subagent,
             status_message: None,
             source_path: PathBuf::from("/tmp/hooks.json"),
             display_order,
@@ -148,17 +152,24 @@ mod tests {
                 HookEventName::Stop,
                 /*matcher*/ None,
                 "echo same",
+                /*allow_subagent*/ true,
                 /*display_order*/ 0,
             ),
             make_handler(
                 HookEventName::Stop,
                 /*matcher*/ None,
                 "echo same",
+                /*allow_subagent*/ true,
                 /*display_order*/ 1,
             ),
         ];
 
-        let selected = select_handlers(&handlers, HookEventName::Stop, /*matcher_input*/ None);
+        let selected = select_handlers(
+            &handlers,
+            HookEventName::Stop,
+            /*matcher_input*/ None,
+            /*is_subagent*/ false,
+        );
 
         assert_eq!(selected.len(), 2);
         assert_eq!(selected[0].display_order, 0);
@@ -172,17 +183,24 @@ mod tests {
                 HookEventName::SessionStart,
                 Some("start.*"),
                 "echo same",
+                /*allow_subagent*/ true,
                 /*display_order*/ 0,
             ),
             make_handler(
                 HookEventName::SessionStart,
                 Some("^startup$"),
                 "echo same",
+                /*allow_subagent*/ true,
                 /*display_order*/ 1,
             ),
         ];
 
-        let selected = select_handlers(&handlers, HookEventName::SessionStart, Some("startup"));
+        let selected = select_handlers(
+            &handlers,
+            HookEventName::SessionStart,
+            Some("startup"),
+            /*is_subagent*/ false,
+        );
 
         assert_eq!(selected.len(), 2);
         assert_eq!(selected[0].display_order, 0);
@@ -196,17 +214,24 @@ mod tests {
                 HookEventName::PreToolUse,
                 Some("^Bash$"),
                 "echo same",
+                /*allow_subagent*/ true,
                 /*display_order*/ 0,
             ),
             make_handler(
                 HookEventName::PreToolUse,
                 Some("^Edit$"),
                 "echo same",
+                /*allow_subagent*/ true,
                 /*display_order*/ 1,
             ),
         ];
 
-        let selected = select_handlers(&handlers, HookEventName::PreToolUse, Some("Bash"));
+        let selected = select_handlers(
+            &handlers,
+            HookEventName::PreToolUse,
+            Some("Bash"),
+            /*is_subagent*/ false,
+        );
 
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].display_order, 0);
@@ -219,17 +244,24 @@ mod tests {
                 HookEventName::PostToolUse,
                 Some("^Bash$"),
                 "echo same",
+                /*allow_subagent*/ true,
                 /*display_order*/ 0,
             ),
             make_handler(
                 HookEventName::PostToolUse,
                 Some("^Edit$"),
                 "echo same",
+                /*allow_subagent*/ true,
                 /*display_order*/ 1,
             ),
         ];
 
-        let selected = select_handlers(&handlers, HookEventName::PostToolUse, Some("Bash"));
+        let selected = select_handlers(
+            &handlers,
+            HookEventName::PostToolUse,
+            Some("Bash"),
+            /*is_subagent*/ false,
+        );
 
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].display_order, 0);
@@ -242,17 +274,24 @@ mod tests {
                 HookEventName::PreToolUse,
                 Some("*"),
                 "echo same",
+                /*allow_subagent*/ true,
                 /*display_order*/ 0,
             ),
             make_handler(
                 HookEventName::PreToolUse,
                 Some("^Edit$"),
                 "echo same",
+                /*allow_subagent*/ true,
                 /*display_order*/ 1,
             ),
         ];
 
-        let selected = select_handlers(&handlers, HookEventName::PreToolUse, Some("Bash"));
+        let selected = select_handlers(
+            &handlers,
+            HookEventName::PreToolUse,
+            Some("Bash"),
+            /*is_subagent*/ false,
+        );
 
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].display_order, 0);
@@ -264,12 +303,28 @@ mod tests {
             HookEventName::PreToolUse,
             Some("Edit|Write"),
             "echo same",
+            /*allow_subagent*/ true,
             /*display_order*/ 0,
         )];
 
-        let selected_edit = select_handlers(&handlers, HookEventName::PreToolUse, Some("Edit"));
-        let selected_write = select_handlers(&handlers, HookEventName::PreToolUse, Some("Write"));
-        let selected_bash = select_handlers(&handlers, HookEventName::PreToolUse, Some("Bash"));
+        let selected_edit = select_handlers(
+            &handlers,
+            HookEventName::PreToolUse,
+            Some("Edit"),
+            /*is_subagent*/ false,
+        );
+        let selected_write = select_handlers(
+            &handlers,
+            HookEventName::PreToolUse,
+            Some("Write"),
+            /*is_subagent*/ false,
+        );
+        let selected_bash = select_handlers(
+            &handlers,
+            HookEventName::PreToolUse,
+            Some("Bash"),
+            /*is_subagent*/ false,
+        );
 
         assert_eq!(selected_edit.len(), 1);
         assert_eq!(selected_write.len(), 1);
@@ -283,12 +338,14 @@ mod tests {
                 HookEventName::UserPromptSubmit,
                 Some("^hello"),
                 "echo first",
+                /*allow_subagent*/ true,
                 /*display_order*/ 0,
             ),
             make_handler(
                 HookEventName::UserPromptSubmit,
                 Some("["),
                 "echo second",
+                /*allow_subagent*/ true,
                 /*display_order*/ 1,
             ),
         ];
@@ -297,6 +354,7 @@ mod tests {
             &handlers,
             HookEventName::UserPromptSubmit,
             /*matcher_input*/ None,
+            /*is_subagent*/ false,
         );
 
         assert_eq!(selected.len(), 2);
@@ -311,27 +369,85 @@ mod tests {
                 HookEventName::Stop,
                 /*matcher*/ None,
                 "first",
+                /*allow_subagent*/ true,
                 /*display_order*/ 0,
             ),
             make_handler(
                 HookEventName::Stop,
                 /*matcher*/ None,
                 "second",
+                /*allow_subagent*/ true,
                 /*display_order*/ 1,
             ),
             make_handler(
                 HookEventName::Stop,
                 /*matcher*/ None,
                 "third",
+                /*allow_subagent*/ true,
                 /*display_order*/ 2,
             ),
         ];
 
-        let selected = select_handlers(&handlers, HookEventName::Stop, /*matcher_input*/ None);
+        let selected = select_handlers(
+            &handlers,
+            HookEventName::Stop,
+            /*matcher_input*/ None,
+            /*is_subagent*/ false,
+        );
 
         assert_eq!(selected.len(), 3);
         assert_eq!(selected[0].command, "first");
         assert_eq!(selected[1].command, "second");
         assert_eq!(selected[2].command, "third");
+    }
+
+    #[test]
+    fn session_start_skips_handlers_that_disallow_subagents() {
+        let handlers = vec![
+            make_handler(
+                HookEventName::SessionStart,
+                Some("^startup$"),
+                "echo allowed",
+                /*allow_subagent*/ true,
+                /*display_order*/ 0,
+            ),
+            make_handler(
+                HookEventName::SessionStart,
+                Some("^startup$"),
+                "echo blocked",
+                /*allow_subagent*/ false,
+                /*display_order*/ 1,
+            ),
+        ];
+
+        let selected = select_handlers(
+            &handlers,
+            HookEventName::SessionStart,
+            Some("startup"),
+            /*is_subagent*/ true,
+        );
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].command, "echo allowed");
+    }
+
+    #[test]
+    fn stop_keeps_handlers_for_primary_even_when_allow_subagent_is_false() {
+        let handlers = vec![make_handler(
+            HookEventName::Stop,
+            /*matcher*/ None,
+            "echo stop",
+            /*allow_subagent*/ false,
+            /*display_order*/ 0,
+        )];
+
+        let selected = select_handlers(
+            &handlers,
+            HookEventName::Stop,
+            /*matcher_input*/ None,
+            /*is_subagent*/ false,
+        );
+
+        assert_eq!(selected.len(), 1);
     }
 }

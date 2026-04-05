@@ -17,6 +17,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HookCompletedEvent;
 use codex_protocol::protocol::HookRunSummary;
 use codex_protocol::protocol::HookStartedEvent;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
 use serde_json::Value;
 
@@ -101,6 +102,7 @@ pub(crate) async fn run_pending_session_start_hooks(
         model: turn_context.model_info.slug.clone(),
         permission_mode: hook_permission_mode(turn_context),
         source: session_start_source,
+        is_subagent: hook_is_subagent(turn_context),
     };
     let preview_runs = sess.hooks().preview_session_start(&request);
     run_context_injecting_hook(
@@ -131,6 +133,7 @@ pub(crate) async fn run_pre_tool_use_hooks(
         tool_name: "Bash".to_string(),
         tool_use_id,
         command,
+        is_subagent: hook_is_subagent(turn_context),
     };
     let preview_runs = sess.hooks().preview_pre_tool_use(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;
@@ -163,6 +166,7 @@ pub(crate) async fn run_post_tool_use_hooks(
         tool_use_id,
         command,
         tool_response,
+        is_subagent: hook_is_subagent(turn_context),
     };
     let preview_runs = sess.hooks().preview_post_tool_use(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;
@@ -185,6 +189,7 @@ pub(crate) async fn run_user_prompt_submit_hooks(
         model: turn_context.model_info.slug.clone(),
         permission_mode: hook_permission_mode(turn_context),
         prompt,
+        is_subagent: hook_is_subagent(turn_context),
     };
     let preview_runs = sess.hooks().preview_user_prompt_submit(&request);
     run_context_injecting_hook(
@@ -336,6 +341,10 @@ fn hook_permission_mode(turn_context: &TurnContext) -> String {
         | AskForApproval::Granular(_) => "default",
     }
     .to_string()
+}
+
+fn hook_is_subagent(turn_context: &TurnContext) -> bool {
+    matches!(turn_context.session_source, SessionSource::SubAgent(_))
 }
 
 #[cfg(test)]

@@ -30,6 +30,7 @@ pub struct PostToolUseRequest {
     pub tool_use_id: String,
     pub command: String,
     pub tool_response: Value,
+    pub is_subagent: bool,
 }
 
 #[derive(Debug)]
@@ -57,6 +58,7 @@ pub(crate) fn preview(
         handlers,
         HookEventName::PostToolUse,
         Some(&request.tool_name),
+        request.is_subagent,
     )
     .into_iter()
     .map(|handler| dispatcher::running_summary(&handler))
@@ -72,6 +74,7 @@ pub(crate) async fn run(
         handlers,
         HookEventName::PostToolUse,
         Some(&request.tool_name),
+        request.is_subagent,
     );
     if matched.is_empty() {
         return PostToolUseOutcome {
@@ -469,6 +472,7 @@ mod tests {
             matcher: Some("^Bash$".to_string()),
             command: "python3 post_tool_use_hook.py".to_string(),
             timeout_sec: 5,
+            allow_subagent: true,
             status_message: Some("running post tool use hook".to_string()),
             source_path: PathBuf::from("/tmp/hooks.json"),
             display_order: 0,

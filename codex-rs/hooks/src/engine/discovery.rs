@@ -138,6 +138,7 @@ fn append_group_handlers(
                 timeout_sec,
                 r#async,
                 status_message,
+                allow_subagent,
             } => {
                 if r#async {
                     warnings.push(format!(
@@ -159,20 +160,27 @@ fn append_group_handlers(
                     matcher: matcher.map(ToOwned::to_owned),
                     command,
                     timeout_sec,
+                    allow_subagent,
                     status_message,
                     source_path: source_path.to_path_buf(),
                     display_order: *display_order,
                 });
                 *display_order += 1;
             }
-            HookHandlerConfig::Prompt {} => warnings.push(format!(
-                "skipping prompt hook in {}: prompt hooks are not supported yet",
-                source_path.display()
-            )),
-            HookHandlerConfig::Agent {} => warnings.push(format!(
-                "skipping agent hook in {}: agent hooks are not supported yet",
-                source_path.display()
-            )),
+            HookHandlerConfig::Prompt { allow_subagent } => {
+                let _ = allow_subagent;
+                warnings.push(format!(
+                    "skipping prompt hook in {}: prompt hooks are not supported yet",
+                    source_path.display()
+                ));
+            }
+            HookHandlerConfig::Agent { allow_subagent } => {
+                let _ = allow_subagent;
+                warnings.push(format!(
+                    "skipping agent hook in {}: agent hooks are not supported yet",
+                    source_path.display()
+                ));
+            }
         }
     }
 }
@@ -208,8 +216,59 @@ mod tests {
 
     use super::ConfiguredHandler;
     use super::HookHandlerConfig;
+    use super::HooksFile;
     use super::append_group_handlers;
     use crate::events::common::matcher_pattern_for_event;
+
+    #[test]
+    fn discovery_defaults_allow_subagent_to_true() {
+        let parsed: HooksFile = serde_json::from_value(serde_json::json!({
+            "hooks": {
+                "SessionStart": [{
+                    "hooks": [{
+                        "type": "command",
+                        "command": "echo hello"
+                    }]
+                }]
+            }
+        }))
+        .expect("parse hooks file");
+
+        let HookHandlerConfig::Command { allow_subagent, .. } =
+            parsed.hooks.session_start[0].hooks[0].clone()
+        else {
+            panic!("expected command hook");
+        };
+
+        assert_eq!(allow_subagent, true);
+    }
+
+    #[test]
+    fn discovery_preserves_allow_subagent_false() {
+        let mut handlers = Vec::new();
+        let mut warnings = Vec::new();
+        let mut display_order = 0;
+
+        append_group_handlers(
+            &mut handlers,
+            &mut warnings,
+            &mut display_order,
+            Path::new("/tmp/hooks.json"),
+            HookEventName::Stop,
+            /*matcher*/ None,
+            vec![HookHandlerConfig::Command {
+                command: "echo hello".to_string(),
+                timeout_sec: None,
+                r#async: false,
+                status_message: None,
+                allow_subagent: false,
+            }],
+        );
+
+        assert_eq!(warnings, Vec::<String>::new());
+        assert_eq!(handlers.len(), 1);
+        assert_eq!(handlers[0].allow_subagent, false);
+    }
 
     #[test]
     fn user_prompt_submit_ignores_invalid_matcher_during_discovery() {
@@ -229,6 +288,7 @@ mod tests {
                 timeout_sec: None,
                 r#async: false,
                 status_message: None,
+                allow_subagent: true,
             }],
         );
 
@@ -240,6 +300,7 @@ mod tests {
                 matcher: None,
                 command: "echo hello".to_string(),
                 timeout_sec: 600,
+                allow_subagent: true,
                 status_message: None,
                 source_path: PathBuf::from("/tmp/hooks.json"),
                 display_order: 0,
@@ -265,6 +326,7 @@ mod tests {
                 timeout_sec: None,
                 r#async: false,
                 status_message: None,
+                allow_subagent: true,
             }],
         );
 
@@ -276,6 +338,7 @@ mod tests {
                 matcher: Some("^Bash$".to_string()),
                 command: "echo hello".to_string(),
                 timeout_sec: 600,
+                allow_subagent: true,
                 status_message: None,
                 source_path: PathBuf::from("/tmp/hooks.json"),
                 display_order: 0,
@@ -301,6 +364,7 @@ mod tests {
                 timeout_sec: None,
                 r#async: false,
                 status_message: None,
+                allow_subagent: true,
             }],
         );
 
@@ -327,6 +391,7 @@ mod tests {
                 timeout_sec: None,
                 r#async: false,
                 status_message: None,
+                allow_subagent: true,
             }],
         );
 
