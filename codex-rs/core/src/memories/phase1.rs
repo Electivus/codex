@@ -165,12 +165,13 @@ impl RequestContext {
         turn_context: &TurnContext,
         turn_metadata_header: Option<String>,
         model_info: ModelInfo,
+        reasoning_effort: ReasoningEffortConfig,
     ) -> Self {
         Self {
             model_info,
             turn_metadata_header,
             session_telemetry: turn_context.session_telemetry.clone(),
-            reasoning_effort: Some(phase_one::REASONING_EFFORT),
+            reasoning_effort: Some(reasoning_effort),
             reasoning_summary: turn_context.reasoning_summary,
             service_tier: turn_context.config.service_tier,
         }
@@ -235,6 +236,7 @@ async fn build_request_context(session: &Arc<Session>, config: &Config) -> Reque
         turn_context.as_ref(),
         turn_context.turn_metadata_state.current_header_value(),
         model,
+        config.memories.extract_reasoning_effort,
     )
 }
 

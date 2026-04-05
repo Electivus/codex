@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::fmt;
 use wildmatch::WildMatchPattern;
 
+use codex_protocol::openai_models::ReasoningEffort;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -168,6 +169,10 @@ pub struct MemoriesToml {
     pub extract_model: Option<String>,
     /// Model used for memory consolidation.
     pub consolidation_model: Option<String>,
+    /// Reasoning effort used for phase-1 memory extraction.
+    pub extract_reasoning_effort: Option<ReasoningEffort>,
+    /// Reasoning effort used for phase-2 memory consolidation.
+    pub consolidation_reasoning_effort: Option<ReasoningEffort>,
 }
 
 /// Effective memories settings after defaults are applied.
@@ -183,6 +188,8 @@ pub struct MemoriesConfig {
     pub min_rollout_idle_hours: i64,
     pub extract_model: Option<String>,
     pub consolidation_model: Option<String>,
+    pub extract_reasoning_effort: ReasoningEffort,
+    pub consolidation_reasoning_effort: ReasoningEffort,
 }
 
 impl Default for MemoriesConfig {
@@ -198,6 +205,8 @@ impl Default for MemoriesConfig {
             min_rollout_idle_hours: DEFAULT_MEMORIES_MIN_ROLLOUT_IDLE_HOURS,
             extract_model: None,
             consolidation_model: None,
+            extract_reasoning_effort: ReasoningEffort::Low,
+            consolidation_reasoning_effort: ReasoningEffort::Medium,
         }
     }
 }
@@ -233,6 +242,12 @@ impl From<MemoriesToml> for MemoriesConfig {
                 .clamp(1, 48),
             extract_model: toml.extract_model,
             consolidation_model: toml.consolidation_model,
+            extract_reasoning_effort: toml
+                .extract_reasoning_effort
+                .unwrap_or(defaults.extract_reasoning_effort),
+            consolidation_reasoning_effort: toml
+                .consolidation_reasoning_effort
+                .unwrap_or(defaults.consolidation_reasoning_effort),
         }
     }
 }

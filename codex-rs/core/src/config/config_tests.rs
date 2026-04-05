@@ -22,6 +22,7 @@ use codex_features::Feature;
 use codex_features::FeaturesToml;
 use codex_model_provider_info::WireApi;
 use codex_models_manager::bundled_models_response;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -162,6 +163,8 @@ consolidation_model = "gpt-5"
             min_rollout_idle_hours: Some(24),
             extract_model: Some("gpt-5-mini".to_string()),
             consolidation_model: Some("gpt-5".to_string()),
+            extract_reasoning_effort: None,
+            consolidation_reasoning_effort: None,
         }),
         memories_cfg.memories
     );
@@ -185,7 +188,54 @@ consolidation_model = "gpt-5"
             min_rollout_idle_hours: 24,
             extract_model: Some("gpt-5-mini".to_string()),
             consolidation_model: Some("gpt-5".to_string()),
+            extract_reasoning_effort: ReasoningEffort::Low,
+            consolidation_reasoning_effort: ReasoningEffort::Medium,
         }
+    );
+}
+
+#[test]
+fn memories_reasoning_effort_defaults_and_overrides() {
+    let parsed = toml::from_str::<ConfigToml>(
+        r#"
+[memories]
+extract_reasoning_effort = "high"
+consolidation_reasoning_effort = "low"
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        parsed.memories,
+        Some(MemoriesToml {
+            no_memories_if_mcp_or_web_search: None,
+            generate_memories: None,
+            use_memories: None,
+            max_raw_memories_for_consolidation: None,
+            max_unused_days: None,
+            max_rollout_age_days: None,
+            max_rollouts_per_startup: None,
+            min_rollout_idle_hours: None,
+            extract_model: None,
+            consolidation_model: None,
+            extract_reasoning_effort: Some(ReasoningEffort::High),
+            consolidation_reasoning_effort: Some(ReasoningEffort::Low),
+        })
+    );
+
+    let defaults = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").path().to_path_buf(),
+    )
+    .expect("load default config");
+    assert_eq!(
+        defaults.memories.extract_reasoning_effort,
+        ReasoningEffort::Low
+    );
+    assert_eq!(
+        defaults.memories.consolidation_reasoning_effort,
+        ReasoningEffort::Medium
     );
 }
 
