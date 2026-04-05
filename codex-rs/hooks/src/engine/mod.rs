@@ -80,17 +80,6 @@ impl ClaudeHooksEngine {
             };
         }
 
-        if cfg!(windows) {
-            return Self {
-                handlers: Vec::new(),
-                warnings: vec![
-                    "Disabled `codex_hooks` for this session because `hooks.json` lifecycle hooks are not supported on Windows yet."
-                        .to_string(),
-                ],
-                shell,
-            };
-        }
-
         let _ = schema_loader::generated_hook_schemas();
         let discovered = discovery::discover_handlers(config_layer_stack);
         Self {
@@ -161,5 +150,25 @@ impl ClaudeHooksEngine {
 
     pub(crate) async fn run_stop(&self, request: StopRequest) -> StopOutcome {
         crate::events::stop::run(&self.handlers, &self.shell, request).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ClaudeHooksEngine;
+    use super::CommandShell;
+
+    #[test]
+    fn enabled_engine_without_config_layers_has_no_startup_warnings() {
+        let engine = ClaudeHooksEngine::new(
+            /*enabled*/ true,
+            /*config_layer_stack*/ None,
+            CommandShell {
+                program: String::new(),
+                args: Vec::new(),
+            },
+        );
+
+        assert!(engine.warnings().is_empty());
     }
 }
