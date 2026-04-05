@@ -559,6 +559,9 @@
           ],
           "description": "Optional path to a file containing model instructions."
         },
+        "model_parallel_tool_calls": {
+          "type": "boolean"
+        },
         "model_provider": {
           "description": "The key in the `model_providers` map identifying the [`ModelProviderInfo`] to use.",
           "type": "string"
@@ -2396,6 +2399,10 @@
         }
       ],
       "description": "Optional path to a file containing model instructions that will override the built-in instructions for the selected model. Users are STRONGLY DISCOURAGED from using this field, as deviating from the instructions sanctioned by Codex will likely degrade model performance."
+    },
+    "model_parallel_tool_calls": {
+      "description": "Override for model parallel tool calling support.",
+      "type": "boolean"
     },
     "model_provider": {
       "description": "Provider to use from the model_providers map.",

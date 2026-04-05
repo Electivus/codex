@@ -275,6 +275,12 @@
             "null"
           ]
         },
+        "model_parallel_tool_calls": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "model_provider": {
           "type": [
             "string",
@@ -617,6 +623,12 @@
         "model": {
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "model_parallel_tool_calls": {
+          "type": [
+            "boolean",
             "null"
           ]
         },

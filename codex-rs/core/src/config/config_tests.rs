@@ -4526,6 +4526,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
             model_reasoning_effort: Some(ReasoningEffort::High),
+            model_parallel_tool_calls: None,
             plan_mode_reasoning_effort: None,
             model_reasoning_summary: Some(ReasoningSummary::Detailed),
             model_supports_reasoning_summaries: None,
@@ -4671,6 +4672,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         hide_agent_reasoning: false,
         show_raw_agent_reasoning: false,
         model_reasoning_effort: None,
+        model_parallel_tool_calls: None,
         plan_mode_reasoning_effort: None,
         model_reasoning_summary: None,
         model_supports_reasoning_summaries: None,
@@ -4814,6 +4816,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         hide_agent_reasoning: false,
         show_raw_agent_reasoning: false,
         model_reasoning_effort: None,
+        model_parallel_tool_calls: None,
         plan_mode_reasoning_effort: None,
         model_reasoning_summary: None,
         model_supports_reasoning_summaries: None,
@@ -4943,6 +4946,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         hide_agent_reasoning: false,
         show_raw_agent_reasoning: false,
         model_reasoning_effort: Some(ReasoningEffort::High),
+        model_parallel_tool_calls: None,
         plan_mode_reasoning_effort: None,
         model_reasoning_summary: Some(ReasoningSummary::Detailed),
         model_supports_reasoning_summaries: None,
@@ -5871,6 +5875,47 @@ include_environment_context = true
     assert!(config.include_permissions_instructions);
     assert!(!config.include_apps_instructions);
     assert!(config.include_environment_context);
+    Ok(())
+}
+
+#[tokio::test]
+async fn model_parallel_tool_calls_loads_from_top_level_config() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        "model_parallel_tool_calls = false\n",
+    )?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert_eq!(config.model_parallel_tool_calls, Some(false));
+    Ok(())
+}
+
+#[tokio::test]
+async fn model_parallel_tool_calls_profile_overrides_global_config() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"model_parallel_tool_calls = true
+profile = "chatty"
+
+[profiles.chatty]
+model_parallel_tool_calls = false
+"#,
+    )?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert_eq!(config.model_parallel_tool_calls, Some(false));
     Ok(())
 }
 
