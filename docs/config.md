@@ -81,6 +81,17 @@ Plan preset. The string value `none` means "no reasoning" (an explicit Plan
 override), not "inherit the global default". There is currently no separate
 config value for "follow the global default in Plan mode".
 
+## Memories phase reasoning effort
+
+Under `[memories]`, `extract_reasoning_effort` controls phase-1 rollout
+extraction and `consolidation_reasoning_effort` controls phase-2 memory
+consolidation.
+
+When unset, Codex keeps the current built-in defaults:
+
+- `extract_reasoning_effort = "low"`
+- `consolidation_reasoning_effort = "medium"`
+
 ## Realtime start instructions
 
 `experimental_realtime_start_instructions` lets you replace the built-in

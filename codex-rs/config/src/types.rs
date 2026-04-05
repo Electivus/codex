@@ -21,10 +21,10 @@ use std::collections::HashMap;
 use std::fmt;
 use wildmatch::WildMatchPattern;
 
+use codex_protocol::openai_models::ReasoningEffort;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
-use codex_protocol::openai_models::ReasoningEffort;
 
 pub const DEFAULT_OTEL_ENVIRONMENT: &str = "dev";
 pub const DEFAULT_MEMORIES_MAX_ROLLOUTS_PER_STARTUP: usize = 16;

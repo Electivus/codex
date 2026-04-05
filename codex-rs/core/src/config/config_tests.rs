@@ -229,7 +229,10 @@ consolidation_reasoning_effort = "low"
         tempdir().expect("tempdir").path().to_path_buf(),
     )
     .expect("load default config");
-    assert_eq!(defaults.memories.extract_reasoning_effort, ReasoningEffort::Low);
+    assert_eq!(
+        defaults.memories.extract_reasoning_effort,
+        ReasoningEffort::Low
+    );
     assert_eq!(
         defaults.memories.consolidation_reasoning_effort,
         ReasoningEffort::Medium
