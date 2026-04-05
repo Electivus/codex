@@ -127,7 +127,9 @@ jobs:
 
   argument_comment_lint_prebuilt:
     name: Argument comment lint - ${{ matrix.name }}
-    runs-on: ${{ matrix.runs_on || matrix.runner }}
+    # Forks do not have access to the private `codex-runners` group used for
+    # Windows coverage in the canonical repository.
+    runs-on: ${{ matrix.openai_runs_on && github.repository == 'openai/codex' && fromJSON(matrix.openai_runs_on) || matrix.github_runner }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     needs: changed
     if: ${{ needs.changed.outputs.argument_comment_lint == 'true' || needs.changed.outputs.workflows == 'true' }}
@@ -136,17 +138,15 @@ jobs:
       matrix:
         include:
           - name: Linux
-            runner: ubuntu-24.04
+            github_runner: ubuntu-24.04
             timeout_minutes: 30
           - name: macOS
-            runner: macos-15-xlarge
+            github_runner: macos-15-xlarge
             timeout_minutes: 30
           - name: Windows
-            runner: windows-x64
+            github_runner: windows-latest
             timeout_minutes: 30
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-x64
+            openai_runs_on: '{"group":"codex-runners","labels":"codex-windows-x64"}'
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: ./.github/actions/setup-bazel-ci
