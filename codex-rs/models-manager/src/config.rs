@@ -8,5 +8,6 @@ pub struct ModelsManagerConfig {
     pub base_instructions: Option<String>,
     pub personality_enabled: bool,
     pub model_supports_reasoning_summaries: Option<bool>,
+    pub model_parallel_tool_calls: Option<bool>,
     pub model_catalog: Option<ModelsResponse>,
 }

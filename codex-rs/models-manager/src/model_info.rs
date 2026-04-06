@@ -26,6 +26,9 @@ pub fn with_config_overrides(mut model: ModelInfo, config: &ModelsManagerConfig)
     {
         model.supports_reasoning_summaries = true;
     }
+    if let Some(parallel_tool_calls) = config.model_parallel_tool_calls {
+        model.supports_parallel_tool_calls = parallel_tool_calls;
+    }
     if let Some(context_window) = config.model_context_window {
         model.context_window = Some(context_window);
     }

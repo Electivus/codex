@@ -1578,6 +1578,50 @@ async fn includes_default_reasoning_effort_in_request_when_defined_by_model_info
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn includes_model_parallel_tool_calls_override_in_request() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+    let TestCodex { codex, .. } = test_codex()
+        .with_model("gpt-5.1")
+        .with_config(|config| {
+            config.model_parallel_tool_calls = Some(false);
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+
+    assert_eq!(
+        request_body
+            .get("parallel_tool_calls")
+            .and_then(serde_json::Value::as_bool),
+        Some(false)
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_turn_collaboration_mode_overrides_model_and_effort() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;

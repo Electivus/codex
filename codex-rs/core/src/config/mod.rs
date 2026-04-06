@@ -471,6 +471,8 @@ pub struct Config {
     /// Value to use for `reasoning.effort` when making a request using the
     /// Responses API.
     pub model_reasoning_effort: Option<ReasoningEffort>,
+    /// Optional override for model parallel tool calling support.
+    pub model_parallel_tool_calls: Option<bool>,
     /// Optional Plan-mode-specific reasoning effort override used by the TUI.
     ///
     /// When unset, Plan mode uses the built-in Plan preset default (currently
@@ -700,6 +702,7 @@ impl Config {
             base_instructions: self.base_instructions.clone(),
             personality_enabled: self.features.enabled(Feature::Personality),
             model_supports_reasoning_summaries: self.model_supports_reasoning_summaries,
+            model_parallel_tool_calls: self.model_parallel_tool_calls,
             model_catalog: self.model_catalog.clone(),
         }
     }
@@ -1316,6 +1319,8 @@ pub struct ConfigToml {
     pub show_raw_agent_reasoning: Option<bool>,
 
     pub model_reasoning_effort: Option<ReasoningEffort>,
+    /// Override for model parallel tool calling support.
+    pub model_parallel_tool_calls: Option<bool>,
     pub plan_mode_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
@@ -1473,6 +1478,7 @@ impl From<ConfigToml> for UserSavedConfig {
             forced_login_method: config_toml.forced_login_method,
             model: config_toml.model,
             model_reasoning_effort: config_toml.model_reasoning_effort,
+            model_parallel_tool_calls: config_toml.model_parallel_tool_calls,
             model_reasoning_summary: config_toml.model_reasoning_summary,
             model_verbosity: config_toml.model_verbosity,
             tools: config_toml.tools.map(From::from),
@@ -2704,6 +2710,9 @@ impl Config {
             model_reasoning_effort: config_profile
                 .model_reasoning_effort
                 .or(cfg.model_reasoning_effort),
+            model_parallel_tool_calls: config_profile
+                .model_parallel_tool_calls
+                .or(cfg.model_parallel_tool_calls),
             plan_mode_reasoning_effort: config_profile
                 .plan_mode_reasoning_effort
                 .or(cfg.plan_mode_reasoning_effort),
