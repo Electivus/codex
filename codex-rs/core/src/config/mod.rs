@@ -58,6 +58,7 @@ use codex_features::Features;
 use codex_features::FeaturesToml;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::AuthCredentialsStoreMode;
+use codex_login::AuthManagerConfig;
 use codex_mcp::mcp::McpConfig;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
@@ -595,6 +596,20 @@ pub struct Config {
     pub otel: codex_config::types::OtelConfig,
 }
 
+impl AuthManagerConfig for Config {
+    fn codex_home(&self) -> PathBuf {
+        self.codex_home.clone()
+    }
+
+    fn cli_auth_credentials_store_mode(&self) -> AuthCredentialsStoreMode {
+        self.cli_auth_credentials_store_mode
+    }
+
+    fn forced_chatgpt_workspace_id(&self) -> Option<String> {
+        self.forced_chatgpt_workspace_id.clone()
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ConfigBuilder {
     codex_home: Option<PathBuf>,
@@ -690,6 +705,11 @@ impl ConfigBuilder {
             codex_home,
             config_layer_stack,
         )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn without_managed_config_for_tests() -> Self {
+        Self::default().loader_overrides(LoaderOverrides::without_managed_config_for_tests())
     }
 }
 
@@ -2066,6 +2086,7 @@ impl Config {
         // Config.
         let ConfigRequirements {
             approval_policy: mut constrained_approval_policy,
+            approvals_reviewer: mut constrained_approvals_reviewer,
             sandbox_policy: mut constrained_sandbox_policy,
             web_search_mode: mut constrained_web_search_mode,
             feature_requirements,
@@ -2314,10 +2335,22 @@ impl Config {
             );
             approval_policy = constrained_approval_policy.value();
         }
-        let approvals_reviewer = approvals_reviewer_override
+        let approvals_reviewer_was_explicit = approvals_reviewer_override.is_some()
+            || config_profile.approvals_reviewer.is_some()
+            || cfg.approvals_reviewer.is_some();
+        let mut approvals_reviewer = approvals_reviewer_override
             .or(config_profile.approvals_reviewer)
             .or(cfg.approvals_reviewer)
             .unwrap_or(ApprovalsReviewer::User);
+        if !approvals_reviewer_was_explicit
+            && let Err(err) = constrained_approvals_reviewer.can_set(&approvals_reviewer)
+        {
+            tracing::warn!(
+                error = %err,
+                "default approvals reviewer is disallowed by requirements; falling back to required default"
+            );
+            approvals_reviewer = constrained_approvals_reviewer.value();
+        }
         let web_search_mode = resolve_web_search_mode(&cfg, &config_profile, &features)
             .unwrap_or(WebSearchMode::Cached);
         let web_search_config = resolve_web_search_config(&cfg, &config_profile);
@@ -2561,6 +2594,12 @@ impl Config {
             &mut startup_warnings,
         )?;
         apply_requirement_constrained_value(
+            "approvals_reviewer",
+            approvals_reviewer,
+            &mut constrained_approvals_reviewer,
+            &mut startup_warnings,
+        )?;
+        apply_requirement_constrained_value(
             "sandbox_mode",
             sandbox_policy,
             &mut constrained_sandbox_policy,
@@ -2645,7 +2684,7 @@ impl Config {
                 windows_sandbox_mode,
                 windows_sandbox_private_desktop,
             },
-            approvals_reviewer,
+            approvals_reviewer: constrained_approvals_reviewer.value(),
             enforce_residency: enforce_residency.value,
             notify: cfg.notify,
             user_instructions,
