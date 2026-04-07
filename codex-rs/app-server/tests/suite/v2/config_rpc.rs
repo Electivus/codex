@@ -378,7 +378,10 @@ model_parallel_tool_calls = false
         }
     );
     assert_eq!(
-        origins.get("model_parallel_tool_calls").expect("origin").name,
+        origins
+            .get("model_parallel_tool_calls")
+            .expect("origin")
+            .name,
         ConfigLayerSource::Project {
             dot_codex_folder: project_config
         }
