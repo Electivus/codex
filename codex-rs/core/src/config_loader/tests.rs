@@ -2,9 +2,7 @@ use super::LoaderOverrides;
 use super::load_config_layers_state;
 use crate::config::ConfigBuilder;
 use crate::config::ConfigOverrides;
-use crate::config::ConfigToml;
 use crate::config::ConstraintError;
-use crate::config::ProjectConfig;
 use crate::config_loader::CloudRequirementsLoadError;
 use crate::config_loader::CloudRequirementsLoader;
 use crate::config_loader::ConfigLayerEntry;
@@ -16,6 +14,8 @@ use crate::config_loader::RequirementSource;
 use crate::config_loader::load_requirements_toml;
 use crate::config_loader::version_for_toml;
 use codex_config::CONFIG_TOML_FILE;
+use codex_config::config_toml::ConfigToml;
+use codex_config::config_toml::ProjectConfig;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::protocol::AskForApproval;
@@ -905,7 +905,7 @@ model_instructions_file = "child.txt"
         .await?;
 
     assert_eq!(
-        config.base_instructions.as_deref(),
+        config.base_instructions.as_ref().and_then(Option::as_deref),
         Some("child instructions")
     );
 
@@ -941,7 +941,7 @@ async fn cli_override_model_instructions_file_sets_base_instructions() -> std::i
         .await?;
 
     assert_eq!(
-        config.base_instructions.as_deref(),
+        config.base_instructions.as_ref().and_then(Option::as_deref),
         Some("cli override instructions")
     );
 
