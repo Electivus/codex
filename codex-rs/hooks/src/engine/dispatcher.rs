@@ -35,7 +35,8 @@ pub(crate) fn select_handlers(
         .filter(|handler| match event_name {
             HookEventName::PreToolUse
             | HookEventName::PostToolUse
-            | HookEventName::SessionStart => {
+            | HookEventName::SessionStart
+            | HookEventName::BackgroundProcessCompleted => {
                 matches_matcher(handler.matcher.as_deref(), matcher_input)
             }
             HookEventName::UserPromptSubmit | HookEventName::Stop => true,
@@ -109,7 +110,9 @@ pub(crate) fn completed_summary(
 
 fn scope_for_event(event_name: HookEventName) -> HookScope {
     match event_name {
-        HookEventName::SessionStart => HookScope::Thread,
+        HookEventName::SessionStart | HookEventName::BackgroundProcessCompleted => {
+            HookScope::Thread
+        }
         HookEventName::PreToolUse
         | HookEventName::PostToolUse
         | HookEventName::UserPromptSubmit
@@ -122,8 +125,11 @@ mod tests {
     use std::path::PathBuf;
 
     use codex_protocol::protocol::HookEventName;
+    use codex_protocol::protocol::HookScope;
+    use pretty_assertions::assert_eq;
 
     use super::ConfiguredHandler;
+    use super::scope_for_event;
     use super::select_handlers;
 
     fn make_handler(
@@ -429,6 +435,30 @@ mod tests {
 
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].command, "echo allowed");
+    }
+
+    #[test]
+    fn background_process_completed_uses_thread_scope_and_matcher() {
+        let handlers = vec![make_handler(
+            HookEventName::BackgroundProcessCompleted,
+            Some("^cargo (build|test)$"),
+            "echo hook",
+            /*allow_subagent*/ true,
+            /*display_order*/ 0,
+        )];
+
+        let selected = select_handlers(
+            &handlers,
+            HookEventName::BackgroundProcessCompleted,
+            Some("cargo test"),
+            /*is_subagent*/ false,
+        );
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(
+            scope_for_event(HookEventName::BackgroundProcessCompleted),
+            HookScope::Thread,
+        );
     }
 
     #[test]

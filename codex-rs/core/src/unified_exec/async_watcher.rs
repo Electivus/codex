@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 use tokio::sync::Mutex;
 use tokio::time::Duration;
@@ -9,6 +11,10 @@ use tokio::time::Sleep;
 
 use super::UnifiedExecContext;
 use super::process::UnifiedExecProcess;
+use crate::background_process_completion::BackgroundProcessCompletionRecord;
+use crate::background_process_completion::BackgroundProcessCompletionStatus;
+use crate::background_process_completion::CompletionBehavior;
+use crate::background_process_completion::bounded_output_tail;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::exec::MAX_EXEC_OUTPUT_DELTAS_PER_CALL;
@@ -23,6 +29,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_protocol::protocol::ExecOutputStream;
+use codex_protocol::protocol::SessionSource;
 
 pub(crate) const TRAILING_OUTPUT_GRACE: Duration = Duration::from_millis(100);
 
@@ -109,9 +116,12 @@ pub(crate) fn spawn_exit_watcher(
     session_ref: Arc<Session>,
     turn_ref: Arc<TurnContext>,
     call_id: String,
+    raw_command: String,
     command: Vec<String>,
     cwd: PathBuf,
     process_id: i32,
+    completion_behavior: CompletionBehavior,
+    late_completion_eligible: Arc<AtomicBool>,
     transcript: Arc<Mutex<HeadTailBuffer>>,
     started_at: Instant,
 ) {
@@ -124,26 +134,46 @@ pub(crate) fn spawn_exit_watcher(
 
         let duration = Instant::now().saturating_duration_since(started_at);
         if let Some(message) = process.failure_message() {
+            let aggregated_output = resolve_failed_aggregated_output(&transcript, &message).await;
             emit_failed_exec_end_for_unified_exec(
-                session_ref,
-                turn_ref,
-                call_id,
+                Arc::clone(&session_ref),
+                Arc::clone(&turn_ref),
+                call_id.clone(),
                 command,
-                cwd,
+                cwd.clone(),
                 Some(process_id.to_string()),
                 transcript,
                 message,
                 duration,
             )
             .await;
+            maybe_queue_background_completion(
+                &session_ref,
+                &late_completion_eligible,
+                BackgroundProcessCompletionRecord {
+                    call_id,
+                    process_id,
+                    originating_turn_id: turn_ref.sub_id.clone(),
+                    cwd,
+                    command: raw_command,
+                    exit_code: -1,
+                    duration_ms: i64::try_from(duration.as_millis()).unwrap_or(i64::MAX),
+                    status: BackgroundProcessCompletionStatus::Failed,
+                    completion_behavior,
+                    is_subagent: matches!(turn_ref.session_source, SessionSource::SubAgent(_)),
+                    aggregated_output_tail: bounded_output_tail(&aggregated_output),
+                },
+            )
+            .await;
         } else {
             let exit_code = process.exit_code().unwrap_or(-1);
+            let aggregated_output = resolve_aggregated_output(&transcript, String::new()).await;
             emit_exec_end_for_unified_exec(
-                session_ref,
-                turn_ref,
-                call_id,
+                Arc::clone(&session_ref),
+                Arc::clone(&turn_ref),
+                call_id.clone(),
                 command,
-                cwd,
+                cwd.clone(),
                 Some(process_id.to_string()),
                 transcript,
                 String::new(),
@@ -151,8 +181,55 @@ pub(crate) fn spawn_exit_watcher(
                 duration,
             )
             .await;
+            maybe_queue_background_completion(
+                &session_ref,
+                &late_completion_eligible,
+                BackgroundProcessCompletionRecord {
+                    call_id,
+                    process_id,
+                    originating_turn_id: turn_ref.sub_id.clone(),
+                    cwd,
+                    command: raw_command,
+                    exit_code,
+                    duration_ms: i64::try_from(duration.as_millis()).unwrap_or(i64::MAX),
+                    status: BackgroundProcessCompletionStatus::Completed,
+                    completion_behavior,
+                    is_subagent: matches!(turn_ref.session_source, SessionSource::SubAgent(_)),
+                    aggregated_output_tail: bounded_output_tail(&aggregated_output),
+                },
+            )
+            .await;
         }
     });
+}
+
+async fn maybe_queue_background_completion(
+    session_ref: &Arc<Session>,
+    late_completion_eligible: &Arc<AtomicBool>,
+    record: BackgroundProcessCompletionRecord,
+) {
+    if !late_completion_eligible.load(Ordering::Relaxed) {
+        return;
+    }
+
+    let has_active_turn = session_ref.has_active_turn_or_running_agent().await;
+
+    match (record.completion_behavior, has_active_turn) {
+        (CompletionBehavior::Ignore, _) | (CompletionBehavior::Auto, true) => {}
+        (CompletionBehavior::Auto, false) | (CompletionBehavior::Wake, false) => {
+            if session_ref
+                .queue_background_process_completion_for_next_turn(record)
+                .await
+            {
+                session_ref.maybe_start_turn_for_pending_work().await;
+            }
+        }
+        (CompletionBehavior::Wake, true) => {
+            let _ = session_ref
+                .queue_background_process_completion_for_next_turn(record)
+                .await;
+        }
+    }
 }
 
 async fn process_chunk(
@@ -315,6 +392,18 @@ async fn resolve_aggregated_output(
     }
 
     String::from_utf8_lossy(&guard.to_bytes()).to_string()
+}
+
+async fn resolve_failed_aggregated_output(
+    transcript: &Arc<Mutex<HeadTailBuffer>>,
+    message: &str,
+) -> String {
+    let stdout = resolve_aggregated_output(transcript, String::new()).await;
+    if stdout.is_empty() {
+        message.to_string()
+    } else {
+        format!("{stdout}\n{message}")
+    }
 }
 
 #[cfg(test)]

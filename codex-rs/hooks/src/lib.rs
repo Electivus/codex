@@ -5,6 +5,8 @@ mod registry;
 mod schema;
 mod types;
 
+pub use events::background_process_completed::BackgroundProcessCompletedOutcome;
+pub use events::background_process_completed::BackgroundProcessCompletedRequest;
 pub use events::post_tool_use::PostToolUseOutcome;
 pub use events::post_tool_use::PostToolUseRequest;
 pub use events::pre_tool_use::PreToolUseOutcome;

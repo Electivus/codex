@@ -254,6 +254,9 @@ impl Session {
         let cancellation_token = CancellationToken::new();
         let done = Arc::new(Notify::new());
 
+        let queued_background_process_completions = self
+            .take_queued_background_process_completions_for_next_turn()
+            .await;
         let queued_response_items = self.take_queued_response_items_for_next_turn().await;
         let mailbox_items = self.get_pending_input().await;
         let turn_state = {
@@ -265,6 +268,9 @@ impl Session {
         {
             let mut turn_state = turn_state.lock().await;
             turn_state.token_usage_at_turn_start = token_usage_at_turn_start;
+            for completion in queued_background_process_completions {
+                turn_state.push_pending_background_process_completion(completion);
+            }
             for item in queued_response_items {
                 turn_state.push_pending_input(item);
             }
@@ -350,6 +356,9 @@ impl Session {
         sub_id: String,
     ) {
         if !self.has_queued_response_items_for_next_turn().await
+            && !self
+                .has_queued_background_process_completions_for_next_turn()
+                .await
             && !self.has_trigger_turn_mailbox_items().await
         {
             return;

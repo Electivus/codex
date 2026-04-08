@@ -121,6 +121,20 @@ fn exec_command_tool_matches_expected_spec() {
                 )),
         ),
         (
+            "completion_behavior".to_string(),
+            JsonSchema::string_enum(
+                vec![
+                    serde_json::json!("auto"),
+                    serde_json::json!("wake"),
+                    serde_json::json!("ignore"),
+                ],
+                Some(
+                    "Whether Codex should create a follow-up turn when the process completes after the original turn. Defaults to \"auto\". Use \"wake\" for long-running work Codex intends to revisit, and \"ignore\" for fire-and-forget commands."
+                        .to_string(),
+                ),
+            ),
+        ),
+        (
             "shell".to_string(),
             JsonSchema::string(Some(
                     "Shell binary to launch. Defaults to the user's default shell.".to_string(),
@@ -171,6 +185,27 @@ fn exec_command_tool_matches_expected_spec() {
             ),
             output_schema: Some(unified_exec_output_schema()),
         })
+    );
+}
+
+#[test]
+fn exec_command_tool_includes_completion_behavior() {
+    let tool = create_exec_command_tool(CommandToolOptions {
+        allow_login_shell: true,
+        exec_permission_approvals_enabled: false,
+    });
+
+    let ToolSpec::Function(spec) = tool else {
+        panic!("expected function tool");
+    };
+
+    assert!(
+        spec.parameters
+            .properties
+            .as_ref()
+            .expect("exec_command input schema should stay object-shaped")
+            .contains_key("completion_behavior"),
+        "exec_command should expose completion_behavior"
     );
 }
 

@@ -3,6 +3,8 @@ use tokio::process::Command;
 
 use crate::engine::ClaudeHooksEngine;
 use crate::engine::CommandShell;
+use crate::events::background_process_completed::BackgroundProcessCompletedOutcome;
+use crate::events::background_process_completed::BackgroundProcessCompletedRequest;
 use crate::events::post_tool_use::PostToolUseOutcome;
 use crate::events::post_tool_use::PostToolUseRequest;
 use crate::events::pre_tool_use::PreToolUseOutcome;
@@ -96,6 +98,13 @@ impl Hooks {
         self.engine.preview_session_start(request)
     }
 
+    pub fn preview_background_process_completed(
+        &self,
+        request: &BackgroundProcessCompletedRequest,
+    ) -> Vec<codex_protocol::protocol::HookRunSummary> {
+        self.engine.preview_background_process_completed(request)
+    }
+
     pub fn preview_pre_tool_use(
         &self,
         request: &PreToolUseRequest,
@@ -116,6 +125,16 @@ impl Hooks {
         turn_id: Option<String>,
     ) -> SessionStartOutcome {
         self.engine.run_session_start(request, turn_id).await
+    }
+
+    pub async fn run_background_process_completed(
+        &self,
+        request: BackgroundProcessCompletedRequest,
+        turn_id: Option<String>,
+    ) -> BackgroundProcessCompletedOutcome {
+        self.engine
+            .run_background_process_completed(request, turn_id)
+            .await
     }
 
     pub async fn run_pre_tool_use(&self, request: PreToolUseRequest) -> PreToolUseOutcome {

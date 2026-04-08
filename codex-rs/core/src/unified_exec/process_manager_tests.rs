@@ -1,5 +1,16 @@
 use super::*;
+use crate::background_process_completion::CompletionBehavior;
+use crate::codex::make_session_and_context;
+use crate::exec::ExecCapturePolicy;
+use crate::exec::ExecExpiration;
+use crate::unified_exec::NoopSpawnLifecycle;
+use crate::unified_exec::UnifiedExecContext;
+use crate::unified_exec::head_tail_buffer::HeadTailBuffer;
+use codex_sandboxing::SandboxType;
+use core_test_support::skip_if_sandbox;
 use pretty_assertions::assert_eq;
+use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::time::Duration;
 use tokio::time::Instant;
 
@@ -101,4 +112,76 @@ fn pruning_protects_recent_processes_even_if_exited() {
 
     // (10) is exited but among the last 8; we should drop the LRU outside that set.
     assert_eq!(candidate, Some(1));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn store_process_persists_completion_behavior_in_entry() -> anyhow::Result<()> {
+    skip_if_sandbox!(Ok(()));
+
+    let (session, turn) = make_session_and_context().await;
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    let manager = &session.services.unified_exec_manager;
+    let process_id = manager.allocate_process_id().await;
+    let cwd = turn.cwd.clone().to_path_buf();
+    let command = vec![
+        "bash".to_string(),
+        "-lc".to_string(),
+        "printf persisted".to_string(),
+    ];
+    let request = ExecRequest::new(
+        command.clone(),
+        cwd.clone(),
+        std::env::vars().collect::<HashMap<String, String>>(),
+        /*network*/ None,
+        ExecExpiration::DefaultTimeout,
+        ExecCapturePolicy::ShellTool,
+        SandboxType::None,
+        turn.windows_sandbox_level,
+        /*windows_sandbox_private_desktop*/ false,
+        turn.sandbox_policy.get().clone(),
+        turn.file_system_sandbox_policy.clone(),
+        turn.network_sandbox_policy,
+        /*arg0*/ None,
+    );
+    let process = Arc::new(
+        manager
+            .open_session_with_exec_env(
+                process_id,
+                &request,
+                /*tty*/ false,
+                Box::new(NoopSpawnLifecycle),
+                turn.environment.as_ref().expect("turn environment"),
+            )
+            .await?,
+    );
+    let context =
+        UnifiedExecContext::new(Arc::clone(&session), Arc::clone(&turn), "call".to_string());
+
+    manager
+        .store_process(
+            Arc::clone(&process),
+            &context,
+            "printf persisted",
+            &command,
+            cwd,
+            Instant::now(),
+            process_id,
+            CompletionBehavior::Wake,
+            /*tty*/ false,
+            /*network_approval_id*/ None,
+            Arc::new(tokio::sync::Mutex::new(HeadTailBuffer::default())),
+        )
+        .await;
+
+    let store = manager.process_store.lock().await;
+    let entry = store
+        .processes
+        .get(&process_id)
+        .expect("expected stored process entry");
+    assert_eq!(entry.completion_behavior, CompletionBehavior::Wake);
+    drop(store);
+
+    manager.release_process_id(process_id).await;
+    Ok(())
 }

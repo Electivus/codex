@@ -1,3 +1,4 @@
+pub mod background_process_completed;
 pub(crate) mod common;
 pub mod post_tool_use;
 pub mod pre_tool_use;

@@ -34,6 +34,7 @@ use rand::Rng;
 use rand::rng;
 use tokio::sync::Mutex;
 
+use crate::background_process_completion::CompletionBehavior;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::sandboxing::SandboxPermissions;
@@ -87,8 +88,10 @@ impl UnifiedExecContext {
 
 #[derive(Debug)]
 pub(crate) struct ExecCommandRequest {
+    pub raw_command: String,
     pub command: Vec<String>,
     pub process_id: i32,
+    pub completion_behavior: CompletionBehavior,
     pub yield_time_ms: u64,
     pub max_output_tokens: Option<usize>,
     pub workdir: Option<PathBuf>,
@@ -147,6 +150,7 @@ struct ProcessEntry {
     process: Arc<UnifiedExecProcess>,
     call_id: String,
     process_id: i32,
+    completion_behavior: CompletionBehavior,
     command: Vec<String>,
     tty: bool,
     network_approval_id: Option<String>,

@@ -200,23 +200,29 @@ impl UnifiedExecProcessManager {
         // Persist live sessions before the initial yield wait so interrupting the
         // turn cannot drop the last Arc and terminate the background process.
         let process_started_alive = !process.has_exited() && process.exit_code().is_none();
-        if process_started_alive {
+        let late_completion_eligible = if process_started_alive {
             let network_approval_id = deferred_network_approval
                 .as_ref()
                 .map(|deferred| deferred.registration_id().to_string());
-            self.store_process(
-                Arc::clone(&process),
-                context,
-                &request.command,
-                cwd.clone(),
-                start,
-                request.process_id,
-                request.tty,
-                network_approval_id,
-                Arc::clone(&transcript),
+            Some(
+                self.store_process(
+                    Arc::clone(&process),
+                    context,
+                    &request.raw_command,
+                    &request.command,
+                    cwd.clone(),
+                    start,
+                    request.process_id,
+                    request.completion_behavior,
+                    request.tty,
+                    network_approval_id,
+                    Arc::clone(&transcript),
+                )
+                .await,
             )
-            .await;
-        }
+        } else {
+            None
+        };
 
         let yield_time_ms = clamp_yield_time(request.yield_time_ms);
         // For the initial exec_command call, we both stream output to events
@@ -278,7 +284,12 @@ impl UnifiedExecProcessManager {
                     exit_code,
                     process_id,
                     ..
-                } => (Some(process_id), exit_code),
+                } => {
+                    if let Some(late_completion_eligible) = late_completion_eligible.as_ref() {
+                        late_completion_eligible.store(true, Ordering::Relaxed);
+                    }
+                    (Some(process_id), exit_code)
+                }
                 ProcessStatus::Exited { exit_code, .. } => {
                     process.check_for_sandbox_denial_with_text(&text).await?;
                     (None, exit_code)
@@ -525,18 +536,22 @@ impl UnifiedExecProcessManager {
         &self,
         process: Arc<UnifiedExecProcess>,
         context: &UnifiedExecContext,
+        raw_command: &str,
         command: &[String],
         cwd: PathBuf,
         started_at: Instant,
         process_id: i32,
+        completion_behavior: crate::background_process_completion::CompletionBehavior,
         tty: bool,
         network_approval_id: Option<String>,
         transcript: Arc<tokio::sync::Mutex<HeadTailBuffer>>,
-    ) {
+    ) -> Arc<AtomicBool> {
+        let late_completion_eligible = Arc::new(AtomicBool::new(false));
         let entry = ProcessEntry {
             process: Arc::clone(&process),
             call_id: context.call_id.clone(),
             process_id,
+            completion_behavior,
             command: command.to_vec(),
             tty,
             network_approval_id,
@@ -552,6 +567,11 @@ impl UnifiedExecProcessManager {
         // prune_processes_if_needed runs while holding process_store; do async
         // network-approval cleanup only after dropping that lock.
         if let Some(pruned_entry) = pruned_entry {
+            tracing::trace!(
+                process_id = pruned_entry.process_id,
+                completion_behavior = %pruned_entry.completion_behavior,
+                "pruning unified exec process entry",
+            );
             Self::unregister_network_approval_for_entry(&pruned_entry).await;
             pruned_entry.process.terminate();
         }
@@ -571,12 +591,17 @@ impl UnifiedExecProcessManager {
             Arc::clone(&context.session),
             Arc::clone(&context.turn),
             context.call_id.clone(),
+            raw_command.to_string(),
             command.to_vec(),
             cwd,
             process_id,
+            completion_behavior,
+            Arc::clone(&late_completion_eligible),
             transcript,
             started_at,
         );
+
+        late_completion_eligible
     }
 
     pub(crate) async fn open_session_with_exec_env(

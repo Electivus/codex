@@ -8,6 +8,7 @@
 mod apply_patch;
 mod apps;
 mod arc_monitor;
+pub(crate) mod background_process_completion;
 mod client;
 mod client_common;
 pub(crate) mod codex;

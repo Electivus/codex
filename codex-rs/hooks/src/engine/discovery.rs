@@ -66,6 +66,7 @@ pub(crate) fn discover_handlers(config_layer_stack: Option<&ConfigLayerStack>) -
             pre_tool_use,
             post_tool_use,
             session_start,
+            background_process_completed,
             user_prompt_submit,
             stop,
         } = parsed.hooks;
@@ -82,6 +83,10 @@ pub(crate) fn discover_handlers(config_layer_stack: Option<&ConfigLayerStack>) -
             (
                 codex_protocol::protocol::HookEventName::SessionStart,
                 session_start,
+            ),
+            (
+                codex_protocol::protocol::HookEventName::BackgroundProcessCompleted,
+                background_process_completed,
             ),
             (
                 codex_protocol::protocol::HookEventName::UserPromptSubmit,

@@ -6,6 +6,7 @@ use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use crate::background_process_completion::BackgroundProcessCompletionRecord;
 use crate::codex::PreviousTurnSettings;
 use crate::codex::SessionConfiguration;
 use crate::context_manager::ContextManager;
@@ -32,6 +33,7 @@ pub(crate) struct SessionState {
     pub(crate) startup_prewarm: Option<SessionStartupPrewarmHandle>,
     pub(crate) active_connector_selection: HashSet<String>,
     pub(crate) pending_session_start_source: Option<codex_hooks::SessionStartSource>,
+    pending_background_process_completions: Vec<BackgroundProcessCompletionRecord>,
     granted_permissions: Option<PermissionProfile>,
 }
 
@@ -50,6 +52,7 @@ impl SessionState {
             startup_prewarm: None,
             active_connector_selection: HashSet::new(),
             pending_session_start_source: None,
+            pending_background_process_completions: Vec::new(),
             granted_permissions: None,
         }
     }
@@ -204,6 +207,32 @@ impl SessionState {
         &mut self,
     ) -> Option<codex_hooks::SessionStartSource> {
         self.pending_session_start_source.take()
+    }
+
+    pub(crate) fn queue_background_process_completion(
+        &mut self,
+        record: BackgroundProcessCompletionRecord,
+    ) -> bool {
+        if self
+            .pending_background_process_completions
+            .iter()
+            .any(|existing| existing.matches_completion(&record.call_id, record.process_id))
+        {
+            return false;
+        }
+
+        self.pending_background_process_completions.push(record);
+        true
+    }
+
+    pub(crate) fn take_pending_background_process_completions(
+        &mut self,
+    ) -> Vec<BackgroundProcessCompletionRecord> {
+        std::mem::take(&mut self.pending_background_process_completions)
+    }
+
+    pub(crate) fn has_pending_background_process_completions(&self) -> bool {
+        !self.pending_background_process_completions.is_empty()
     }
 
     pub(crate) fn record_granted_permissions(&mut self, permissions: PermissionProfile) {

@@ -749,6 +749,466 @@ async fn unified_exec_full_lifecycle_with_background_end_event() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn background_completion_auto_wakes_idle_thread() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.use_experimental_unified_exec_tool = true;
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build_remote_aware(&server).await?;
+
+    let call_id = "uexec-background-auto";
+    let args = json!({
+        "cmd": "sleep 0.5; printf READY",
+        "yield_time_ms": 250,
+        "completion_behavior": "auto",
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("msg-1", "started background command"),
+            ev_completed("resp-2"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-3"),
+            ev_assistant_message("msg-1", "background completion observed"),
+            ev_completed("resp-3"),
+        ]),
+    ];
+    let request_log = mount_sse_sequence(&server, responses).await;
+
+    submit_unified_exec_turn(
+        &test,
+        "run a resumable background command",
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+
+    wait_for_event_with_timeout(
+        &test.codex,
+        |event| matches!(event, EventMsg::TurnComplete(_)),
+        Duration::from_secs(10),
+    )
+    .await;
+    wait_for_event_with_timeout(
+        &test.codex,
+        |event| matches!(event, EventMsg::TurnComplete(_)),
+        Duration::from_secs(10),
+    )
+    .await;
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        3,
+        "expected a follow-up turn after late completion"
+    );
+    assert!(
+        requests[2]
+            .message_input_texts("developer")
+            .iter()
+            .any(|text| text.contains("Background process completed after the previous turn ended")),
+        "expected runtime completion note in follow-up request: {:?}",
+        requests[2].body_json()
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn short_lived_exec_command_does_not_enqueue_background_follow_up() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.use_experimental_unified_exec_tool = true;
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build_remote_aware(&server).await?;
+
+    let call_id = "uexec-short-lived-no-follow-up";
+    let args = json!({
+        "cmd": "sleep 1; printf short-lived",
+        "yield_time_ms": 1500,
+        "completion_behavior": "wake",
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    let request_log = mount_sse_sequence(&server, responses).await;
+
+    submit_unified_exec_turn(
+        &test,
+        "run short lived command",
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+
+    wait_for_event_with_timeout(
+        &test.codex,
+        |event| matches!(event, EventMsg::TurnComplete(_)),
+        Duration::from_secs(10),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    assert_eq!(
+        request_log.requests().len(),
+        2,
+        "short-lived commands must not create a third turn"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn background_completion_auto_drops_when_thread_is_active() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.use_experimental_unified_exec_tool = true;
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build_remote_aware(&server).await?;
+
+    let background_call_id = "uexec-auto-drop";
+    let background_args = json!({
+        "cmd": "sleep 1.5; printf AUTO-DROP",
+        "yield_time_ms": 250,
+        "completion_behavior": "auto",
+    });
+
+    let active_turn_call_id = "uexec-active-turn";
+    let active_turn_args = json!({
+        "cmd": "sleep 4; printf ACTIVE-TURN",
+        "yield_time_ms": 4500,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(
+                background_call_id,
+                "exec_command",
+                &serde_json::to_string(&background_args)?,
+            ),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("msg-1", "background started"),
+            ev_completed("resp-2"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-3"),
+            ev_function_call(
+                active_turn_call_id,
+                "exec_command",
+                &serde_json::to_string(&active_turn_args)?,
+            ),
+            ev_completed("resp-3"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-4"),
+            ev_assistant_message("msg-2", "active turn finished"),
+            ev_completed("resp-4"),
+        ]),
+    ];
+    let request_log = mount_sse_sequence(&server, responses).await;
+
+    submit_unified_exec_turn(
+        &test,
+        "start auto background command",
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+    wait_for_event_with_timeout(
+        &test.codex,
+        |event| matches!(event, EventMsg::TurnComplete(_)),
+        Duration::from_secs(10),
+    )
+    .await;
+
+    submit_unified_exec_turn(
+        &test,
+        "keep the thread busy",
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+    wait_for_event_with_timeout(
+        &test.codex,
+        |event| {
+            matches!(
+                event,
+                EventMsg::ExecCommandBegin(ev) if ev.call_id == active_turn_call_id
+            )
+        },
+        Duration::from_secs(10),
+    )
+    .await;
+    let background_completed_while_active = loop {
+        let event = wait_for_event(&test.codex, |_| true).await;
+        match event {
+            EventMsg::ExecCommandEnd(ev) if ev.call_id == background_call_id => break true,
+            EventMsg::TurnComplete(_) => break false,
+            _ => {}
+        }
+    };
+    assert!(
+        background_completed_while_active,
+        "expected background completion before the active turn finished"
+    );
+    wait_for_event_with_timeout(
+        &test.codex,
+        |event| matches!(event, EventMsg::TurnComplete(_)),
+        Duration::from_secs(10),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(800)).await;
+
+    assert_eq!(
+        request_log.requests().len(),
+        4,
+        "auto should drop the completion while another turn is active"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn background_completion_wake_queues_after_active_turn_finishes() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.use_experimental_unified_exec_tool = true;
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build_remote_aware(&server).await?;
+
+    let background_call_id = "uexec-wake-queue";
+    let background_args = json!({
+        "cmd": "sleep 1.5; printf WAKE-QUEUE",
+        "yield_time_ms": 250,
+        "completion_behavior": "wake",
+    });
+
+    let active_turn_call_id = "uexec-wake-active-turn";
+    let active_turn_args = json!({
+        "cmd": "sleep 4; printf ACTIVE-TURN",
+        "yield_time_ms": 4500,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(
+                background_call_id,
+                "exec_command",
+                &serde_json::to_string(&background_args)?,
+            ),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("msg-1", "background started"),
+            ev_completed("resp-2"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-3"),
+            ev_function_call(
+                active_turn_call_id,
+                "exec_command",
+                &serde_json::to_string(&active_turn_args)?,
+            ),
+            ev_completed("resp-3"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-4"),
+            ev_assistant_message("msg-2", "active turn finished"),
+            ev_completed("resp-4"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-5"),
+            ev_assistant_message("msg-3", "queued wake delivered"),
+            ev_completed("resp-5"),
+        ]),
+    ];
+    let request_log = mount_sse_sequence(&server, responses).await;
+
+    submit_unified_exec_turn(
+        &test,
+        "start wake background command",
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+    wait_for_event_with_timeout(
+        &test.codex,
+        |event| matches!(event, EventMsg::TurnComplete(_)),
+        Duration::from_secs(10),
+    )
+    .await;
+
+    submit_unified_exec_turn(
+        &test,
+        "keep the thread busy",
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+    wait_for_event_with_timeout(
+        &test.codex,
+        |event| {
+            matches!(
+                event,
+                EventMsg::ExecCommandBegin(ev) if ev.call_id == active_turn_call_id
+            )
+        },
+        Duration::from_secs(10),
+    )
+    .await;
+    let background_completed_while_active = loop {
+        let event = wait_for_event(&test.codex, |_| true).await;
+        match event {
+            EventMsg::ExecCommandEnd(ev) if ev.call_id == background_call_id => break true,
+            EventMsg::TurnComplete(_) => break false,
+            _ => {}
+        }
+    };
+    assert!(
+        background_completed_while_active,
+        "expected background completion before the active turn finished"
+    );
+    wait_for_event_with_timeout(
+        &test.codex,
+        |event| matches!(event, EventMsg::TurnComplete(_)),
+        Duration::from_secs(10),
+    )
+    .await;
+    wait_for_event_with_timeout(
+        &test.codex,
+        |event| matches!(event, EventMsg::TurnComplete(_)),
+        Duration::from_secs(10),
+    )
+    .await;
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        5,
+        "wake should queue one extra turn after the active turn completes"
+    );
+    assert!(
+        requests[4]
+            .message_input_texts("developer")
+            .iter()
+            .any(|text| text.contains("Background process completed after the previous turn ended")),
+        "expected runtime completion note in queued wake request: {:?}",
+        requests[4].body_json()
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn background_completion_ignore_suppresses_follow_up_turns() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.use_experimental_unified_exec_tool = true;
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build_remote_aware(&server).await?;
+
+    let call_id = "uexec-ignore";
+    let args = json!({
+        "cmd": "sleep 0.5; printf IGNORE",
+        "yield_time_ms": 250,
+        "completion_behavior": "ignore",
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("msg-1", "ignore mode started"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    let request_log = mount_sse_sequence(&server, responses).await;
+
+    submit_unified_exec_turn(
+        &test,
+        "run ignored background command",
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+    wait_for_event_with_timeout(
+        &test.codex,
+        |event| matches!(event, EventMsg::TurnComplete(_)),
+        Duration::from_secs(10),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(800)).await;
+
+    assert_eq!(
+        request_log.requests().len(),
+        2,
+        "ignore should suppress follow-up turns"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_emits_terminal_interaction_for_write_stdin() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));

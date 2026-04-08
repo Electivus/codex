@@ -1,6 +1,8 @@
 use std::future::Future;
 use std::sync::Arc;
 
+use codex_hooks::BackgroundProcessCompletedOutcome;
+use codex_hooks::BackgroundProcessCompletedRequest;
 use codex_hooks::PostToolUseOutcome;
 use codex_hooks::PostToolUseRequest;
 use codex_hooks::PreToolUseOutcome;
@@ -21,6 +23,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
 use serde_json::Value;
 
+use crate::background_process_completion::BackgroundProcessCompletionRecord;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::event_mapping::parse_turn_item;
@@ -72,6 +75,24 @@ impl From<SessionStartOutcome> for ContextInjectingHookOutcome {
 impl From<UserPromptSubmitOutcome> for ContextInjectingHookOutcome {
     fn from(value: UserPromptSubmitOutcome) -> Self {
         let UserPromptSubmitOutcome {
+            hook_events,
+            should_stop,
+            stop_reason: _,
+            additional_contexts,
+        } = value;
+        Self {
+            hook_events,
+            outcome: HookRuntimeOutcome {
+                should_stop,
+                additional_contexts,
+            },
+        }
+    }
+}
+
+impl From<BackgroundProcessCompletedOutcome> for ContextInjectingHookOutcome {
+    fn from(value: BackgroundProcessCompletedOutcome) -> Self {
+        let BackgroundProcessCompletedOutcome {
             hook_events,
             should_stop,
             stop_reason: _,
@@ -199,6 +220,46 @@ pub(crate) async fn run_user_prompt_submit_hooks(
         sess.hooks().run_user_prompt_submit(request),
     )
     .await
+}
+
+pub(crate) async fn record_background_process_completion(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    completion: BackgroundProcessCompletionRecord,
+) {
+    let request = BackgroundProcessCompletedRequest {
+        session_id: sess.conversation_id,
+        originating_turn_id: completion.originating_turn_id.clone(),
+        cwd: completion.cwd.clone(),
+        transcript_path: sess.hook_transcript_path().await,
+        model: turn_context.model_info.slug.clone(),
+        permission_mode: hook_permission_mode(turn_context),
+        call_id: completion.call_id.clone(),
+        process_id: completion.process_id.to_string(),
+        command: completion.command.clone(),
+        exit_code: completion.exit_code,
+        duration_ms: completion.duration_ms,
+        status: completion.status.to_string(),
+        completion_behavior: completion.completion_behavior.to_string(),
+        is_subagent: completion.is_subagent,
+        aggregated_output_tail: completion.aggregated_output_tail.clone(),
+    };
+    let preview_runs = sess.hooks().preview_background_process_completed(&request);
+    let outcome = run_context_injecting_hook(
+        sess,
+        turn_context,
+        preview_runs,
+        sess.hooks()
+            .run_background_process_completed(request, Some(turn_context.sub_id.clone())),
+    )
+    .await;
+    if outcome.record_additional_contexts(sess, turn_context).await {
+        return;
+    }
+
+    let runtime_note = completion.runtime_note_message();
+    sess.record_conversation_items(turn_context, std::slice::from_ref(&runtime_note))
+        .await;
 }
 
 pub(crate) async fn inspect_pending_input(
