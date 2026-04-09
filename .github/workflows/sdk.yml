@@ -12,7 +12,7 @@ jobs:
     runs-on: ${{ github.repository == 'openai/codex' && fromJSON('{"group":"codex-runners","labels":"codex-linux-x64"}') || 'ubuntu-24.04' }}
     # Forks fall back to GitHub-hosted runners and local Bazel execution, which
     # can take materially longer than the canonical repo's BuildBuddy-backed path.
-    timeout-minutes: ${{ github.repository == 'openai/codex' && 10 || 30 }}
+    timeout-minutes: ${{ github.repository == 'openai/codex' && 10 || 60 }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
