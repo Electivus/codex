@@ -155,6 +155,14 @@ if [[ "${RUNNER_OS:-}" == "Windows" && $windows_msvc_host_platform -eq 1 ]]; the
   fi
 fi
 
+has_jobs_override=0
+for arg in "${bazel_args[@]}"; do
+  if [[ "$arg" == --jobs=* ]]; then
+    has_jobs_override=1
+    break
+  fi
+done
+
 if [[ $remote_download_toplevel -eq 1 ]]; then
   # Override the CI config's remote_download_minimal setting when callers need
   # the built artifact to exist on disk after the command completes.
@@ -216,6 +224,14 @@ if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
   # seen in CI (for example "is not a symlink" or permission errors while
   # materializing external repos such as rules_perl). We still use BuildBuddy for
   # remote execution/cache; this only disables the startup-level repo contents cache.
+  if [[ "${RUNNER_OS:-}" == "macOS" && "${GITHUB_REPOSITORY:-}" != "openai/codex" && $has_jobs_override -eq 0 ]]; then
+    # The canonical repository uses larger macOS runners. Forks fall back to the
+    # standard GitHub-hosted macOS pool, where the shared remote config's
+    # `--jobs=800` can exhaust native threads in the local Bazel server before
+    # remote execution has a chance to help.
+    post_config_bazel_args+=(--jobs=100)
+  fi
+
   bazel_run_args=(
     "${bazel_args[@]}"
     "--config=${ci_config}"
