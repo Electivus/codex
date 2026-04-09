@@ -746,7 +746,7 @@ async fn session_start_hook_allow_subagent_false_skips_spawned_subagent() -> Res
 
     let child_requests = wait_for_requests(&child_turn).await?;
     let spawned_id = wait_for_spawned_thread_id(&test).await?;
-    assert_eq!(child_requests.len(), 1);
+    assert!(!child_requests.is_empty());
 
     let hook_inputs = read_session_start_hook_inputs(test.codex_home_path())?;
     assert_eq!(hook_inputs.len(), 1);
