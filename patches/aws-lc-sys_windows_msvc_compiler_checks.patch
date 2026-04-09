@@ -1,8 +1,7 @@
 diff --git a/builder/cc_builder.rs b/builder/cc_builder.rs
 --- a/builder/cc_builder.rs
 +++ b/builder/cc_builder.rs
-@@ -638,7 +638,13 @@
- 
+@@ -640,5 +640,11 @@
          let compiler = cc_build.get_compiler();
 -        if compiler.is_like_gnu() || compiler.is_like_clang() {
 +        if target().ends_with("windows-msvc") {
