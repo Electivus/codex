@@ -97,6 +97,7 @@ pub struct McpProcess {
 }
 
 pub const DEFAULT_CLIENT_NAME: &str = "codex-app-server-tests";
+const DEFAULT_TEST_RUST_LOG: &str = "codex_app_server=info";
 
 impl McpProcess {
     pub async fn new(codex_home: &Path) -> anyhow::Result<Self> {
@@ -133,7 +134,7 @@ impl McpProcess {
         cmd.stderr(Stdio::piped());
         cmd.current_dir(codex_home);
         cmd.env("CODEX_HOME", codex_home);
-        cmd.env("RUST_LOG", "info");
+        cmd.env("RUST_LOG", DEFAULT_TEST_RUST_LOG);
         cmd.env_remove(CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR);
         cmd.args(args);
 

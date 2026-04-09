@@ -499,23 +499,68 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
     assert_eq!(request.url.path(), "/v1/realtime/calls");
     assert_eq!(request.url.query(), None);
     let body = String::from_utf8(request.body).context("multipart body should be utf-8")?;
-    let session = r#"{"tool_choice":"auto","type":"realtime","instructions":"backend prompt\n\nstartup context","output_modalities":["audio"],"audio":{"input":{"format":{"type":"audio/pcm","rate":24000},"noise_reduction":{"type":"near_field"},"turn_detection":{"type":"server_vad","interrupt_response":true,"create_response":true}},"output":{"format":{"type":"audio/pcm","rate":24000},"voice":"marin"}},"tools":[{"type":"function","name":"codex","description":"Delegate a request to Codex and return the final result to the user. Use this as the default action. If the user asks to do something next, later, after this, or once current work finishes, call this tool so the work is actually queued instead of merely promising to do it later.","parameters":{"type":"object","properties":{"prompt":{"type":"string","description":"The user request to delegate to Codex."}},"required":["prompt"],"additionalProperties":false}}]}"#;
+    let session_prefix = "--codex-realtime-call-boundary\r\n\
+         Content-Disposition: form-data; name=\"sdp\"\r\n\
+         Content-Type: application/sdp\r\n\
+         \r\n\
+         v=offer\r\n\
+         \r\n\
+         --codex-realtime-call-boundary\r\n\
+         Content-Disposition: form-data; name=\"session\"\r\n\
+         Content-Type: application/json\r\n\
+         \r\n";
+    let session_suffix = "\r\n--codex-realtime-call-boundary--\r\n";
+    let session_json = body
+        .strip_prefix(session_prefix)
+        .and_then(|body| body.strip_suffix(session_suffix))
+        .context("multipart body should contain the expected SDP and session parts")?;
+    let session: serde_json::Value =
+        serde_json::from_str(session_json).context("session part should be valid json")?;
     assert_eq!(
-        body,
-        format!(
-            "--codex-realtime-call-boundary\r\n\
-             Content-Disposition: form-data; name=\"sdp\"\r\n\
-             Content-Type: application/sdp\r\n\
-             \r\n\
-             v=offer\r\n\
-             \r\n\
-             --codex-realtime-call-boundary\r\n\
-             Content-Disposition: form-data; name=\"session\"\r\n\
-             Content-Type: application/json\r\n\
-             \r\n\
-             {session}\r\n\
-             --codex-realtime-call-boundary--\r\n"
-        )
+        session,
+        json!({
+            "tool_choice": "auto",
+            "type": "realtime",
+            "instructions": "backend prompt\n\nstartup context",
+            "output_modalities": ["audio"],
+            "audio": {
+                "input": {
+                    "format": {
+                        "type": "audio/pcm",
+                        "rate": 24000
+                    },
+                    "noise_reduction": { "type": "near_field" },
+                    "turn_detection": {
+                        "type": "server_vad",
+                        "interrupt_response": true,
+                        "create_response": true
+                    }
+                },
+                "output": {
+                    "format": {
+                        "type": "audio/pcm",
+                        "rate": 24000
+                    },
+                    "voice": "marin"
+                }
+            },
+            "tools": [{
+                "type": "function",
+                "name": "codex",
+                "description": "Delegate a request to Codex and return the final result to the user. Use this as the default action. If the user asks to do something next, later, after this, or once current work finishes, call this tool so the work is actually queued instead of merely promising to do it later.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "prompt": {
+                            "type": "string",
+                            "description": "The user request to delegate to Codex."
+                        }
+                    },
+                    "required": ["prompt"],
+                    "additionalProperties": false
+                }
+            }]
+        })
     );
 
     realtime_server.shutdown().await;
