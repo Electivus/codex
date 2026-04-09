@@ -157,7 +157,7 @@ fi
 
 has_jobs_override=0
 for arg in "${bazel_args[@]}"; do
-  if [[ "$arg" == --jobs=* ]]; then
+  if [[ "$arg" == --jobs=* || "$arg" == --jobs || "$arg" == -j || "$arg" == -j=* || "$arg" =~ ^-j[0-9]+$ ]]; then
     has_jobs_override=1
     break
   fi
