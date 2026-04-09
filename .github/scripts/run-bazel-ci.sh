@@ -163,6 +163,14 @@ for arg in "${bazel_args[@]}"; do
   fi
 done
 
+has_local_test_jobs_override=0
+for arg in "${bazel_args[@]}"; do
+  if [[ "$arg" == --local_test_jobs=* || "$arg" == --local_test_jobs ]]; then
+    has_local_test_jobs_override=1
+    break
+  fi
+done
+
 if [[ $remote_download_toplevel -eq 1 ]]; then
   # Override the CI config's remote_download_minimal setting when callers need
   # the built artifact to exist on disk after the command completes.
@@ -224,12 +232,18 @@ if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
   # seen in CI (for example "is not a symlink" or permission errors while
   # materializing external repos such as rules_perl). We still use BuildBuddy for
   # remote execution/cache; this only disables the startup-level repo contents cache.
-  if [[ "${RUNNER_OS:-}" == "macOS" && "${GITHUB_REPOSITORY:-}" != "openai/codex" && $has_jobs_override -eq 0 ]]; then
-    # The canonical repository uses larger macOS runners. Forks fall back to the
-    # standard GitHub-hosted macOS pool, where the shared remote config's
-    # `--jobs=800` can exhaust native threads in the local Bazel server before
-    # remote execution has a chance to help.
-    post_config_bazel_args+=(--jobs=30)
+  if [[ "${GITHUB_REPOSITORY:-}" != "openai/codex" ]]; then
+    if [[ $has_jobs_override -eq 0 ]]; then
+      # Forks use smaller GitHub-hosted runners than the canonical repository.
+      # Keep authenticated BuildBuddy runs conservative so local Bazel server
+      # pressure and local test execution stay stable across Linux, macOS, and
+      # Windows at the cost of slower wall-clock times.
+      post_config_bazel_args+=(--jobs=20)
+    fi
+
+    if [[ "${bazel_args[0]}" == "test" && $has_local_test_jobs_override -eq 0 ]]; then
+      post_config_bazel_args+=(--local_test_jobs=2)
+    fi
   fi
 
   bazel_run_args=(
