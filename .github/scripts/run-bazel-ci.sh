@@ -226,6 +226,30 @@ if (( ${#bazel_startup_args[@]} > 0 )); then
   bazel_cmd+=("${bazel_startup_args[@]}")
 fi
 
+run_bazel_to_console_log() {
+  local console_log="$1"
+  shift
+
+  set +e
+  run_bazel "${bazel_cmd[@]:1}" \
+    --noexperimental_remote_repo_contents_cache \
+    "$@" \
+    -- \
+    "${bazel_targets[@]}" \
+    2>&1 | tee "$console_log"
+  local status=${PIPESTATUS[0]}
+  set -e
+
+  return "$status"
+}
+
+buildbuddy_remote_infra_failure() {
+  local console_log="$1"
+
+  grep -q 'Failed to query remote execution capabilities' "$console_log" \
+    && grep -Eq 'UNAVAILABLE: .*remote\.buildbuddy\.io|Unable to resolve host remote\.buildbuddy\.io' "$console_log"
+}
+
 if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
   echo "BuildBuddy API key is available; using remote Bazel configuration."
   # Work around Bazel 9 remote repo contents cache / overlay materialization failures
@@ -238,7 +262,7 @@ if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
       # Keep authenticated BuildBuddy runs conservative so local Bazel server
       # pressure and local test execution stay stable across Linux, macOS, and
       # Windows at the cost of slower wall-clock times.
-      post_config_bazel_args+=(--jobs=20)
+      post_config_bazel_args+=(--jobs=10)
     fi
 
     if [[ "${bazel_args[0]}" == "test" && $has_local_test_jobs_override -eq 0 ]]; then
@@ -254,15 +278,31 @@ if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
   if (( ${#post_config_bazel_args[@]} > 0 )); then
     bazel_run_args+=("${post_config_bazel_args[@]}")
   fi
-  set +e
-  run_bazel "${bazel_cmd[@]:1}" \
-    --noexperimental_remote_repo_contents_cache \
-    "${bazel_run_args[@]}" \
-    -- \
-    "${bazel_targets[@]}" \
-    2>&1 | tee "$bazel_console_log"
-  bazel_status=${PIPESTATUS[0]}
-  set -e
+  if run_bazel_to_console_log "$bazel_console_log" "${bazel_run_args[@]}"; then
+    bazel_status=0
+  else
+    bazel_status=$?
+  fi
+
+  if [[ $bazel_status -ne 0 && "${GITHUB_REPOSITORY:-}" != "openai/codex" ]] \
+    && buildbuddy_remote_infra_failure "$bazel_console_log"; then
+    echo "BuildBuddy remote execution is unavailable; retrying once with local Bazel configuration."
+    bazel_run_args=(
+      "${bazel_args[@]}"
+      --remote_cache=
+      --remote_executor=
+      --experimental_remote_downloader=
+    )
+    if (( ${#post_config_bazel_args[@]} > 0 )); then
+      bazel_run_args+=("${post_config_bazel_args[@]}")
+    fi
+    : > "$bazel_console_log"
+    if run_bazel_to_console_log "$bazel_console_log" "${bazel_run_args[@]}"; then
+      bazel_status=0
+    else
+      bazel_status=$?
+    fi
+  fi
 else
   echo "BuildBuddy API key is not available; using local Bazel configuration."
   # Keep fork/community PRs on Bazel but disable remote services that are
@@ -291,15 +331,11 @@ else
   if (( ${#post_config_bazel_args[@]} > 0 )); then
     bazel_run_args+=("${post_config_bazel_args[@]}")
   fi
-  set +e
-  run_bazel "${bazel_cmd[@]:1}" \
-    --noexperimental_remote_repo_contents_cache \
-    "${bazel_run_args[@]}" \
-    -- \
-    "${bazel_targets[@]}" \
-    2>&1 | tee "$bazel_console_log"
-  bazel_status=${PIPESTATUS[0]}
-  set -e
+  if run_bazel_to_console_log "$bazel_console_log" "${bazel_run_args[@]}"; then
+    bazel_status=0
+  else
+    bazel_status=$?
+  fi
 fi
 
 if [[ ${bazel_status:-0} -ne 0 ]]; then
