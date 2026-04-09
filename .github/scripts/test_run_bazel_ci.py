@@ -103,7 +103,7 @@ class RunBazelCiTests(unittest.TestCase):
             bazel_args = bazel_args_file.read_text().splitlines()
             self.assertIn("--config=ci-macos", bazel_args)
             self.assertIn("--remote_header=x-buildbuddy-api-key=test-key", bazel_args)
-            self.assertIn("--jobs=100", bazel_args)
+            self.assertIn("--jobs=30", bazel_args)
 
 
 if __name__ == "__main__":

@@ -229,7 +229,7 @@ if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
     # standard GitHub-hosted macOS pool, where the shared remote config's
     # `--jobs=800` can exhaust native threads in the local Bazel server before
     # remote execution has a chance to help.
-    post_config_bazel_args+=(--jobs=100)
+    post_config_bazel_args+=(--jobs=30)
   fi
 
   bazel_run_args=(
