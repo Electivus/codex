@@ -130,7 +130,7 @@ jobs:
     # Forks do not have access to the private `codex-runners` group used for
     # Windows coverage in the canonical repository.
     runs-on: ${{ (github.repository == 'openai/codex' && matrix.openai_runs_on && fromJSON(matrix.openai_runs_on)) || (github.repository == 'openai/codex' && matrix.openai_github_runner) || matrix.github_runner }}
-    timeout-minutes: ${{ github.repository == 'openai/codex' && matrix.timeout_minutes || 60 }}
+    timeout-minutes: ${{ github.repository == 'openai/codex' && matrix.timeout_minutes || 120 }}
     needs: changed
     if: ${{ needs.changed.outputs.argument_comment_lint == 'true' || needs.changed.outputs.workflows == 'true' }}
     strategy:
