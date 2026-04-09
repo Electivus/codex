@@ -155,6 +155,22 @@ if [[ "${RUNNER_OS:-}" == "Windows" && $windows_msvc_host_platform -eq 1 ]]; the
   fi
 fi
 
+has_jobs_override=0
+for arg in "${bazel_args[@]}"; do
+  if [[ "$arg" == --jobs=* || "$arg" == --jobs || "$arg" == -j || "$arg" == -j=* || "$arg" =~ ^-j[0-9]+$ ]]; then
+    has_jobs_override=1
+    break
+  fi
+done
+
+has_local_test_jobs_override=0
+for arg in "${bazel_args[@]}"; do
+  if [[ "$arg" == --local_test_jobs=* || "$arg" == --local_test_jobs ]]; then
+    has_local_test_jobs_override=1
+    break
+  fi
+done
+
 if [[ $remote_download_toplevel -eq 1 ]]; then
   # Override the CI config's remote_download_minimal setting when callers need
   # the built artifact to exist on disk after the command completes.
@@ -210,12 +226,50 @@ if (( ${#bazel_startup_args[@]} > 0 )); then
   bazel_cmd+=("${bazel_startup_args[@]}")
 fi
 
+run_bazel_to_console_log() {
+  local console_log="$1"
+  shift
+
+  set +e
+  run_bazel "${bazel_cmd[@]:1}" \
+    --noexperimental_remote_repo_contents_cache \
+    "$@" \
+    -- \
+    "${bazel_targets[@]}" \
+    2>&1 | tee "$console_log"
+  local status=${PIPESTATUS[0]}
+  set -e
+
+  return "$status"
+}
+
+buildbuddy_remote_infra_failure() {
+  local console_log="$1"
+
+  grep -q 'Failed to query remote execution capabilities' "$console_log" \
+    && grep -Eq 'UNAVAILABLE: .*remote\.buildbuddy\.io|Unable to resolve host remote\.buildbuddy\.io' "$console_log"
+}
+
 if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
   echo "BuildBuddy API key is available; using remote Bazel configuration."
   # Work around Bazel 9 remote repo contents cache / overlay materialization failures
   # seen in CI (for example "is not a symlink" or permission errors while
   # materializing external repos such as rules_perl). We still use BuildBuddy for
   # remote execution/cache; this only disables the startup-level repo contents cache.
+  if [[ "${GITHUB_REPOSITORY:-}" != "openai/codex" ]]; then
+    if [[ $has_jobs_override -eq 0 ]]; then
+      # Forks use smaller GitHub-hosted runners than the canonical repository.
+      # Keep authenticated BuildBuddy runs conservative so local Bazel server
+      # pressure and local test execution stay stable across Linux, macOS, and
+      # Windows at the cost of slower wall-clock times.
+      post_config_bazel_args+=(--jobs=10)
+    fi
+
+    if [[ "${bazel_args[0]}" == "test" && $has_local_test_jobs_override -eq 0 ]]; then
+      post_config_bazel_args+=(--local_test_jobs=2)
+    fi
+  fi
+
   bazel_run_args=(
     "${bazel_args[@]}"
     "--config=${ci_config}"
@@ -224,15 +278,31 @@ if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
   if (( ${#post_config_bazel_args[@]} > 0 )); then
     bazel_run_args+=("${post_config_bazel_args[@]}")
   fi
-  set +e
-  run_bazel "${bazel_cmd[@]:1}" \
-    --noexperimental_remote_repo_contents_cache \
-    "${bazel_run_args[@]}" \
-    -- \
-    "${bazel_targets[@]}" \
-    2>&1 | tee "$bazel_console_log"
-  bazel_status=${PIPESTATUS[0]}
-  set -e
+  if run_bazel_to_console_log "$bazel_console_log" "${bazel_run_args[@]}"; then
+    bazel_status=0
+  else
+    bazel_status=$?
+  fi
+
+  if [[ $bazel_status -ne 0 && "${GITHUB_REPOSITORY:-}" != "openai/codex" ]] \
+    && buildbuddy_remote_infra_failure "$bazel_console_log"; then
+    echo "BuildBuddy remote execution is unavailable; retrying once with local Bazel configuration."
+    bazel_run_args=(
+      "${bazel_args[@]}"
+      --remote_cache=
+      --remote_executor=
+      --experimental_remote_downloader=
+    )
+    if (( ${#post_config_bazel_args[@]} > 0 )); then
+      bazel_run_args+=("${post_config_bazel_args[@]}")
+    fi
+    : > "$bazel_console_log"
+    if run_bazel_to_console_log "$bazel_console_log" "${bazel_run_args[@]}"; then
+      bazel_status=0
+    else
+      bazel_status=$?
+    fi
+  fi
 else
   echo "BuildBuddy API key is not available; using local Bazel configuration."
   # Keep fork/community PRs on Bazel but disable remote services that are
@@ -247,27 +317,25 @@ else
   # --noexperimental_remote_repo_contents_cache:
   #   disable remote repo contents cache enabled in .bazelrc startup options.
   #   https://bazel.build/reference/command-line-reference#startup_options-flag--experimental_remote_repo_contents_cache
-  # --remote_cache= and --remote_executor=:
-  #   clear remote cache/execution endpoints configured in .bazelrc.
+  # --remote_cache=, --remote_executor=, and --experimental_remote_downloader=:
+  #   clear remote cache/execution/downloader endpoints configured in .bazelrc.
   #   https://bazel.build/reference/command-line-reference#common_options-flag--remote_cache
   #   https://bazel.build/reference/command-line-reference#common_options-flag--remote_executor
+  #   https://bazel.build/reference/command-line-reference#flag--experimental_remote_downloader
   bazel_run_args=(
     "${bazel_args[@]}"
     --remote_cache=
     --remote_executor=
+    --experimental_remote_downloader=
   )
   if (( ${#post_config_bazel_args[@]} > 0 )); then
     bazel_run_args+=("${post_config_bazel_args[@]}")
   fi
-  set +e
-  run_bazel "${bazel_cmd[@]:1}" \
-    --noexperimental_remote_repo_contents_cache \
-    "${bazel_run_args[@]}" \
-    -- \
-    "${bazel_targets[@]}" \
-    2>&1 | tee "$bazel_console_log"
-  bazel_status=${PIPESTATUS[0]}
-  set -e
+  if run_bazel_to_console_log "$bazel_console_log" "${bazel_run_args[@]}"; then
+    bazel_status=0
+  else
+    bazel_status=$?
+  fi
 fi
 
 if [[ ${bazel_status:-0} -ne 0 ]]; then

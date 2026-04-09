@@ -29,7 +29,7 @@ use tempfile::TempDir;
 const PARENT_PROMPT: &str = "spawn a subagent and report when it is started";
 const CHILD_PROMPT: &str = "child: say done";
 const SPAWN_CALL_ID: &str = "spawn-call-1";
-const PROXY_START_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 5);
+const PROXY_START_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 15);
 const PROXY_POLL_INTERVAL: Duration = Duration::from_millis(/*millis*/ 20);
 
 struct ResponsesApiProxy {

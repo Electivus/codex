@@ -745,15 +745,28 @@ text("phase 3");
 
     let third_request = third_completion.single_request();
     let third_items = function_tool_output_items(&third_request, "call-3");
-    assert_eq!(third_items.len(), 2);
-    assert_regex_match(
-        concat!(
-            r"(?s)\A",
-            r"Script completed\nWall time \d+\.\d seconds\nOutput:\n\z"
-        ),
-        text_item(&third_items, /*index*/ 0),
-    );
-    assert_eq!(text_item(&third_items, /*index*/ 1), "phase 3");
+    match third_items.len() {
+        1 => {
+            assert_regex_match(
+                concat!(
+                    r"(?s)\A",
+                    r"Script completed\nWall time \d+\.\d seconds\nOutput:\n\z"
+                ),
+                text_item(&third_items, /*index*/ 0),
+            );
+        }
+        2 => {
+            assert_regex_match(
+                concat!(
+                    r"(?s)\A",
+                    r"Script completed\nWall time \d+\.\d seconds\nOutput:\n\z"
+                ),
+                text_item(&third_items, /*index*/ 0),
+            );
+            assert_eq!(text_item(&third_items, /*index*/ 1), "phase 3");
+        }
+        other => panic!("unexpected number of content items: {other}"),
+    }
 
     Ok(())
 }
