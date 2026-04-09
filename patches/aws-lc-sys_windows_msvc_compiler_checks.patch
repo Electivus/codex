@@ -1,0 +1,17 @@
+diff --git a/builder/cc_builder.rs b/builder/cc_builder.rs
+--- a/builder/cc_builder.rs
++++ b/builder/cc_builder.rs
+@@ -638,7 +638,13 @@
+ 
+         let compiler = cc_build.get_compiler();
+-        if compiler.is_like_gnu() || compiler.is_like_clang() {
++        if target().ends_with("windows-msvc") {
++            // These feature probes intentionally leave `main` arguments unused.
++            // With MSVC-style warning levels that becomes C4100, and
++            // `warnings_into_errors(true)` turns the warning into a hard error
++            // before the actual capability check can finish.
++            cc_build.flag("/wd4100");
++        } else if compiler.is_like_gnu() || compiler.is_like_clang() {
+             cc_build.flag("-Wno-unused-parameter");
+         }
+         let result = cc_build.try_compile_intermediates();
