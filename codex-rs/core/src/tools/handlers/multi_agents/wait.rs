@@ -1,13 +1,10 @@
 use super::*;
-use crate::agent::status::is_final;
 use codex_protocol::error::CodexErr;
 use futures::FutureExt;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::watch::Receiver;
 use tokio::time::Instant;
 
 use tokio::time::timeout_at;
@@ -83,18 +80,18 @@ impl ToolHandler for Handler {
             .await;
 
         let mut status_rxs = Vec::with_capacity(receiver_thread_ids.len());
-        let mut initial_final_statuses = Vec::new();
+        let mut initial_handoff_statuses = Vec::new();
         for id in &receiver_thread_ids {
             match session.services.agent_control.subscribe_status(*id).await {
                 Ok(rx) => {
                     let status = rx.borrow().clone();
-                    if is_final(&status) {
-                        initial_final_statuses.push((*id, status));
+                    if is_child_handoff_boundary_status(&status) {
+                        initial_handoff_statuses.push((*id, status));
                     }
                     status_rxs.push((*id, rx));
                 }
                 Err(CodexErr::ThreadNotFound(_)) => {
-                    initial_final_statuses.push((*id, AgentStatus::NotFound));
+                    initial_handoff_statuses.push((*id, AgentStatus::NotFound));
                 }
                 Err(err) => {
                     let mut statuses = HashMap::with_capacity(1);
@@ -119,13 +116,13 @@ impl ToolHandler for Handler {
             }
         }
 
-        let statuses = if !initial_final_statuses.is_empty() {
-            initial_final_statuses
+        let statuses = if !initial_handoff_statuses.is_empty() {
+            initial_handoff_statuses
         } else {
             let mut futures = FuturesUnordered::new();
             for (id, rx) in status_rxs.into_iter() {
                 let session = session.clone();
-                futures.push(wait_for_final_status(session, id, rx));
+                futures.push(wait_for_agent_handoff_status(session, id, rx));
             }
             let mut results = Vec::new();
             let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
@@ -212,27 +209,5 @@ impl ToolOutput for WaitAgentResult {
 
     fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
         tool_output_code_mode_result(self, "wait_agent")
-    }
-}
-
-async fn wait_for_final_status(
-    session: Arc<Session>,
-    thread_id: ThreadId,
-    mut status_rx: Receiver<AgentStatus>,
-) -> Option<(ThreadId, AgentStatus)> {
-    let mut status = status_rx.borrow().clone();
-    if is_final(&status) {
-        return Some((thread_id, status));
-    }
-
-    loop {
-        if status_rx.changed().await.is_err() {
-            let latest = session.services.agent_control.get_status(thread_id).await;
-            return is_final(&latest).then_some((thread_id, latest));
-        }
-        status = status_rx.borrow().clone();
-        if is_final(&status) {
-            return Some((thread_id, status));
-        }
     }
 }

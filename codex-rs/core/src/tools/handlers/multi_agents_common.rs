@@ -24,6 +24,8 @@ use codex_protocol::user_input::UserInput;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::watch::Receiver;
 
 /// Minimum wait timeout to prevent tight polling loops from burning CPU.
 pub(crate) const MIN_WAIT_TIMEOUT_MS: i64 = 10_000;
@@ -106,6 +108,32 @@ pub(crate) fn build_wait_agent_statuses(
     extras.sort_by(|left, right| left.thread_id.to_string().cmp(&right.thread_id.to_string()));
     entries.extend(extras);
     entries
+}
+
+pub(crate) fn is_child_handoff_boundary_status(status: &AgentStatus) -> bool {
+    !matches!(status, AgentStatus::PendingInit | AgentStatus::Running)
+}
+
+pub(crate) async fn wait_for_agent_handoff_status(
+    session: Arc<Session>,
+    thread_id: ThreadId,
+    mut status_rx: Receiver<AgentStatus>,
+) -> Option<(ThreadId, AgentStatus)> {
+    let mut status = status_rx.borrow().clone();
+    if is_child_handoff_boundary_status(&status) {
+        return Some((thread_id, status));
+    }
+
+    loop {
+        if status_rx.changed().await.is_err() {
+            let latest = session.services.agent_control.get_status(thread_id).await;
+            return is_child_handoff_boundary_status(&latest).then_some((thread_id, latest));
+        }
+        status = status_rx.borrow().clone();
+        if is_child_handoff_boundary_status(&status) {
+            return Some((thread_id, status));
+        }
+    }
 }
 
 pub(crate) fn collab_spawn_error(err: CodexErr) -> FunctionCallError {

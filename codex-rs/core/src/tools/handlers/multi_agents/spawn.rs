@@ -31,6 +31,7 @@ impl ToolHandler for Handler {
         } = invocation;
         let arguments = function_arguments(payload)?;
         let args: SpawnAgentArgs = parse_arguments(&arguments)?;
+        let blocking = args.blocking.unwrap_or(true);
         let role_name = args
             .agent_type
             .as_deref()
@@ -95,26 +96,16 @@ impl ToolHandler for Handler {
             )
             .await
             .map_err(collab_spawn_error);
-        let (new_thread_id, new_agent_metadata, status) = match &result {
-            Ok(spawned_agent) => (
-                Some(spawned_agent.thread_id),
-                Some(spawned_agent.metadata.clone()),
-                spawned_agent.status.clone(),
-            ),
-            Err(_) => (None, None, AgentStatus::NotFound),
-        };
-        let agent_snapshot = match new_thread_id {
-            Some(thread_id) => {
-                session
-                    .services
-                    .agent_control
-                    .get_agent_config_snapshot(thread_id)
-                    .await
-            }
-            None => None,
-        };
+        let spawned_agent = result?;
+        let new_thread_id = spawned_agent.thread_id;
+        let new_agent_metadata = spawned_agent.metadata.clone();
+        let agent_snapshot = session
+            .services
+            .agent_control
+            .get_agent_config_snapshot(new_thread_id)
+            .await;
         let (_new_agent_path, new_agent_nickname, new_agent_role) =
-            match (&agent_snapshot, new_agent_metadata) {
+            match (&agent_snapshot, Some(new_agent_metadata)) {
                 (Some(snapshot), _) => (
                     snapshot.session_source.get_agent_path().map(String::from),
                     snapshot.session_source.get_nickname(),
@@ -135,6 +126,20 @@ impl ToolHandler for Handler {
             .as_ref()
             .and_then(|snapshot| snapshot.reasoning_effort)
             .unwrap_or(args.reasoning_effort.unwrap_or_default());
+        let status = if blocking {
+            let status_rx = session
+                .services
+                .agent_control
+                .subscribe_status(new_thread_id)
+                .await
+                .map_err(|err| collab_agent_error(new_thread_id, err))?;
+            wait_for_agent_handoff_status(session.clone(), new_thread_id, status_rx)
+                .await
+                .map(|(_, status)| status)
+                .unwrap_or(AgentStatus::NotFound)
+        } else {
+            session.services.agent_control.get_status(new_thread_id).await
+        };
         let nickname = new_agent_nickname.clone();
         session
             .send_event(
@@ -142,18 +147,17 @@ impl ToolHandler for Handler {
                 CollabAgentSpawnEndEvent {
                     call_id,
                     sender_thread_id: session.conversation_id,
-                    new_thread_id,
+                    new_thread_id: Some(new_thread_id),
                     new_agent_nickname,
                     new_agent_role,
                     prompt,
                     model: effective_model,
                     reasoning_effort: effective_reasoning_effort,
-                    status,
+                    status: status.clone(),
                 }
                 .into(),
             )
             .await;
-        let new_thread_id = result?.thread_id;
         let role_tag = role_name.unwrap_or(DEFAULT_ROLE_NAME);
         turn.session_telemetry.counter(
             "codex.multi_agent.spawn",
@@ -164,6 +168,7 @@ impl ToolHandler for Handler {
         Ok(SpawnAgentResult {
             agent_id: new_thread_id.to_string(),
             nickname,
+            status,
         })
     }
 }
@@ -177,12 +182,14 @@ struct SpawnAgentArgs {
     reasoning_effort: Option<ReasoningEffort>,
     #[serde(default)]
     fork_context: bool,
+    blocking: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
 pub(crate) struct SpawnAgentResult {
     agent_id: String,
     nickname: Option<String>,
+    status: AgentStatus,
 }
 
 impl ToolOutput for SpawnAgentResult {

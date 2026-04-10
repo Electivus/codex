@@ -339,7 +339,8 @@ async fn spawn_agent_uses_explorer_role_and_preserves_approval_policy() {
         "spawn_agent",
         function_payload(json!({
             "message": "inspect this repo",
-            "agent_type": "explorer"
+            "agent_type": "explorer",
+            "blocking": false
         })),
     );
     let output = SpawnAgentHandler
@@ -378,7 +379,8 @@ async fn spawn_agent_returns_agent_id_without_task_name() {
             Arc::new(turn),
             "spawn_agent",
             function_payload(json!({
-                "message": "inspect this repo"
+                "message": "inspect this repo",
+                "blocking": false
             })),
         ))
         .await
@@ -390,6 +392,98 @@ async fn spawn_agent_returns_agent_id_without_task_name() {
     assert!(result["agent_id"].is_string());
     assert!(result.get("task_name").is_none());
     assert!(result.get("nickname").is_some());
+    assert_eq!(success, Some(true));
+}
+
+#[tokio::test]
+async fn spawn_agent_blocks_until_child_turn_completes() {
+    #[derive(Debug, Deserialize)]
+    struct SpawnAgentResult {
+        agent_id: String,
+        nickname: Option<String>,
+        status: AgentStatus,
+    }
+
+    let (mut session, turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.conversation_id = root.thread_id;
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+
+    let mut spawn_task = tokio::spawn({
+        let session = session.clone();
+        let turn = turn.clone();
+        async move {
+            SpawnAgentHandler
+                .handle(invocation(
+                    session,
+                    turn,
+                    "spawn_agent",
+                    function_payload(json!({
+                        "message": "inspect this repo"
+                    })),
+                ))
+                .await
+        }
+    });
+
+    let child_id = timeout(Duration::from_secs(5), async {
+        loop {
+            let thread_ids = manager
+                .agent_control()
+                .list_live_agent_subtree_thread_ids(root.thread_id)
+                .await
+                .expect("list subtree");
+            if let Some(child_id) = thread_ids.into_iter().find(|id| *id != root.thread_id) {
+                break child_id;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("child should be spawned");
+
+    assert!(
+        timeout(Duration::from_millis(200), &mut spawn_task)
+            .await
+            .is_err(),
+        "spawn_agent should still be waiting for the child turn boundary"
+    );
+
+    let child_thread = manager
+        .get_thread(child_id)
+        .await
+        .expect("child thread should exist");
+    let child_turn = child_thread.codex.session.new_default_turn().await;
+    child_thread
+        .codex
+        .session
+        .send_event(
+            child_turn.as_ref(),
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: child_turn.sub_id.clone(),
+                last_agent_message: Some("done".to_string()),
+                completed_at: None,
+                duration_ms: None,
+            }),
+        )
+        .await;
+
+    let output = spawn_task
+        .await
+        .expect("spawn task should join")
+        .expect("spawn_agent should succeed");
+    let (content, success) = expect_text_output(output);
+    let result: SpawnAgentResult =
+        serde_json::from_str(&content).expect("spawn_agent result should be json");
+    assert_eq!(result.agent_id, child_id.to_string());
+    assert!(result.nickname.is_some());
+    assert_eq!(result.status, AgentStatus::Completed(Some("done".to_string())));
     assert_eq!(success, Some(true));
 }
 
@@ -425,6 +519,56 @@ async fn multi_agent_v2_spawn_requires_task_name() {
         panic!("missing task_name should surface as a model-facing error");
     };
     assert!(message.contains("missing field `task_name`"));
+}
+
+#[tokio::test]
+async fn wait_agent_returns_interrupted_status_without_timing_out() {
+    let (mut session, turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    session.services.agent_control = manager.agent_control();
+    let config = turn.config.as_ref().clone();
+    let thread = manager.start_thread(config).await.expect("start thread");
+    let agent_id = thread.thread_id;
+
+    let child_turn = thread.thread.codex.session.new_default_turn().await;
+    thread
+        .thread
+        .codex
+        .session
+        .send_event(
+            child_turn.as_ref(),
+            EventMsg::TurnAborted(TurnAbortedEvent {
+                turn_id: Some(child_turn.sub_id.clone()),
+                reason: TurnAbortReason::Interrupted,
+                completed_at: None,
+                duration_ms: None,
+            }),
+        )
+        .await;
+
+    let output = WaitAgentHandler
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "wait_agent",
+            function_payload(json!({
+                "targets": [agent_id.to_string()],
+                "timeout_ms": 1000
+            })),
+        ))
+        .await
+        .expect("wait_agent should succeed");
+    let (content, success) = expect_text_output(output);
+    let result: wait::WaitAgentResult =
+        serde_json::from_str(&content).expect("wait_agent result should be json");
+    assert_eq!(
+        result,
+        wait::WaitAgentResult {
+            status: HashMap::from([(agent_id.to_string(), AgentStatus::Interrupted)]),
+            timed_out: false,
+        }
+    );
+    assert_eq!(success, None);
 }
 
 #[tokio::test]
@@ -1728,7 +1872,8 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
         "spawn_agent",
         function_payload(json!({
             "message": "await this command",
-            "agent_type": "explorer"
+            "agent_type": "explorer",
+            "blocking": false
         })),
     );
     let output = SpawnAgentHandler
@@ -1788,7 +1933,7 @@ async fn spawn_agent_rejects_when_depth_limit_exceeded() {
         Arc::new(session),
         Arc::new(turn),
         "spawn_agent",
-        function_payload(json!({"message": "hello"})),
+        function_payload(json!({"message": "hello", "blocking": false})),
     );
     let Err(err) = SpawnAgentHandler.handle(invocation).await else {
         panic!("spawn should fail when depth limit exceeded");
@@ -3039,7 +3184,7 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
             parent_session.clone(),
             parent_session.new_default_turn().await,
             "spawn_agent",
-            function_payload(json!({"message": "hello child"})),
+            function_payload(json!({"message": "hello child", "blocking": false})),
         ))
         .await
         .expect("child spawn should succeed");
@@ -3064,7 +3209,7 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
             child_session.clone(),
             child_session.new_default_turn().await,
             "spawn_agent",
-            function_payload(json!({"message": "hello grandchild"})),
+            function_payload(json!({"message": "hello grandchild", "blocking": false})),
         ))
         .await
         .expect("grandchild spawn should succeed");
