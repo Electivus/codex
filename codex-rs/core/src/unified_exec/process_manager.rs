@@ -3,7 +3,6 @@ use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -56,6 +55,7 @@ use crate::unified_exec::process::SpawnLifecycleHandle;
 use crate::unified_exec::process::UnifiedExecProcess;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_protocol::protocol::SessionSource;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::approx_token_count;
 
 const UNIFIED_EXEC_ENV: [(&str, &str); 10] = [
@@ -184,7 +184,7 @@ impl UnifiedExecProcessManager {
         let cwd = request
             .workdir
             .clone()
-            .unwrap_or_else(|| context.turn.cwd.to_path_buf());
+            .unwrap_or_else(|| context.turn.cwd.clone());
         let process = self
             .open_session_with_sandbox(&request, cwd.clone(), context)
             .await;
@@ -208,7 +208,7 @@ impl UnifiedExecProcessManager {
         );
         let emitter = ToolEmitter::unified_exec(
             &request.command,
-            cwd.clone(),
+            cwd.to_path_buf(),
             ExecCommandSource::UnifiedExecStartup,
             Some(request.process_id.to_string()),
         );
@@ -280,7 +280,7 @@ impl UnifiedExecProcessManager {
                     Arc::clone(&context.turn),
                     context.call_id.clone(),
                     request.command.clone(),
-                    cwd.clone(),
+                    cwd.to_path_buf(),
                     Some(request.process_id.to_string()),
                     Arc::clone(&transcript),
                     message.clone(),
@@ -340,7 +340,7 @@ impl UnifiedExecProcessManager {
                 Arc::clone(&context.turn),
                 context.call_id.clone(),
                 request.command.clone(),
-                cwd.clone(),
+                cwd.to_path_buf(),
                 Some(process_id.to_string()),
                 Arc::clone(&transcript),
                 text.clone(),
@@ -569,7 +569,7 @@ impl UnifiedExecProcessManager {
         context: &UnifiedExecContext,
         raw_command: &str,
         command: &[String],
-        cwd: PathBuf,
+        cwd: AbsolutePathBuf,
         started_at: Instant,
         process_id: i32,
         completion_behavior: crate::background_process_completion::CompletionBehavior,
@@ -624,7 +624,7 @@ impl UnifiedExecProcessManager {
             context.call_id.clone(),
             raw_command.to_string(),
             command.to_vec(),
-            cwd,
+            cwd.to_path_buf(),
             process_id,
             completion_behavior,
             Arc::clone(&late_completion_eligible),
@@ -660,7 +660,7 @@ impl UnifiedExecProcessManager {
                 .start(codex_exec_server::ExecParams {
                     process_id: exec_server_process_id(process_id).into(),
                     argv: request.command.clone(),
-                    cwd: request.cwd.clone(),
+                    cwd: request.cwd.to_path_buf(),
                     env: request.env.clone(),
                     tty,
                     arg0: request.arg0.clone(),
@@ -701,7 +701,7 @@ impl UnifiedExecProcessManager {
     pub(super) async fn open_session_with_sandbox(
         &self,
         request: &ExecCommandRequest,
-        cwd: PathBuf,
+        cwd: AbsolutePathBuf,
         context: &UnifiedExecContext,
     ) -> Result<(UnifiedExecProcess, Option<DeferredNetworkApproval>), UnifiedExecError> {
         let env = apply_unified_exec_env(create_env(

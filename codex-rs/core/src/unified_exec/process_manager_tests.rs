@@ -124,7 +124,7 @@ async fn store_process_persists_completion_behavior_in_entry() -> anyhow::Result
     let turn = Arc::new(turn);
     let manager = &session.services.unified_exec_manager;
     let process_id = manager.allocate_process_id().await;
-    let cwd = turn.cwd.clone().to_path_buf();
+    let cwd = turn.cwd.clone();
     let command = vec![
         "bash".to_string(),
         "-lc".to_string(),
@@ -197,7 +197,7 @@ async fn backfill_late_completion_after_arming_queues_already_exited_process() -
     let turn = Arc::new(turn);
     let manager = &session.services.unified_exec_manager;
     let process_id = manager.allocate_process_id().await;
-    let cwd = turn.cwd.clone().to_path_buf();
+    let cwd = turn.cwd.clone();
     let command = vec![
         "bash".to_string(),
         "-lc".to_string(),

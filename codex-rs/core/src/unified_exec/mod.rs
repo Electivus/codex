@@ -24,12 +24,12 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Weak;
 
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::models::PermissionProfile;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use rand::Rng;
 use rand::rng;
 use tokio::sync::Mutex;
@@ -94,7 +94,7 @@ pub(crate) struct ExecCommandRequest {
     pub completion_behavior: CompletionBehavior,
     pub yield_time_ms: u64,
     pub max_output_tokens: Option<usize>,
-    pub workdir: Option<PathBuf>,
+    pub workdir: Option<AbsolutePathBuf>,
     pub network: Option<NetworkProxy>,
     pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
