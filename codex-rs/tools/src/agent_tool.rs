@@ -26,7 +26,7 @@ pub fn create_spawn_agent_tool_v1(options: SpawnAgentToolOptions<'_>) -> ToolSpe
     let available_models_description = (!options.hide_agent_type_model_reasoning)
         .then(|| spawn_agent_models_description(options.available_models));
     let return_value_description =
-        "Returns the spawned agent id plus the user-facing nickname when available.";
+        "Returns the spawned agent id, the user-facing nickname when available, and the child status observed when control returns to the parent.";
     let mut properties = spawn_agent_common_properties_v1(&options.agent_type_description);
     if options.hide_agent_type_model_reasoning {
         hide_spawn_agent_metadata_options(&mut properties);
@@ -320,9 +320,13 @@ fn spawn_agent_output_schema_v1() -> Value {
             "nickname": {
                 "type": ["string", "null"],
                 "description": "User-facing nickname for the spawned agent when available."
+            },
+            "status": {
+                "description": "Child status observed when control returned to the parent.",
+                "allOf": [agent_status_output_schema()]
             }
         },
-        "required": ["agent_id", "nickname"],
+        "required": ["agent_id", "nickname", "status"],
         "additionalProperties": false
     })
 }
@@ -335,9 +339,13 @@ fn spawn_agent_output_schema_v2(hide_agent_metadata: bool) -> Value {
                 "task_name": {
                     "type": "string",
                     "description": "Canonical task name for the spawned agent."
+                },
+                "status": {
+                    "description": "Child status observed when control returned to the parent.",
+                    "allOf": [agent_status_output_schema()]
                 }
             },
-            "required": ["task_name"],
+            "required": ["task_name", "status"],
             "additionalProperties": false
         });
     }
@@ -352,9 +360,13 @@ fn spawn_agent_output_schema_v2(hide_agent_metadata: bool) -> Value {
             "nickname": {
                 "type": ["string", "null"],
                 "description": "User-facing nickname for the spawned agent when available."
+            },
+            "status": {
+                "description": "Child status observed when control returned to the parent.",
+                "allOf": [agent_status_output_schema()]
             }
         },
-        "required": ["task_name", "nickname"],
+        "required": ["task_name", "nickname", "status"],
         "additionalProperties": false
     })
 }
@@ -512,6 +524,13 @@ fn spawn_agent_common_properties_v1(agent_type_description: &str) -> BTreeMap<St
                     .to_string(),
             )),
         ),
+        (
+            "blocking".to_string(),
+            JsonSchema::boolean(Some(
+                "When true or omitted, wait until the child agent reaches a turn boundary and hands control back to the parent. Set `blocking` to false when you intentionally want background execution."
+                    .to_string(),
+            )),
+        ),
         ("items".to_string(), create_collab_input_items_schema()),
         (
             "agent_type".to_string(),
@@ -546,6 +565,13 @@ fn spawn_agent_common_properties_v2(agent_type_description: &str) -> BTreeMap<St
         (
             "message".to_string(),
             JsonSchema::string(Some("Initial plain-text task for the new agent.".to_string())),
+        ),
+        (
+            "blocking".to_string(),
+            JsonSchema::boolean(Some(
+                "When true or omitted, wait until the child agent reaches a turn boundary and hands control back to the parent. Set `blocking` to false when you intentionally want background execution."
+                    .to_string(),
+            )),
         ),
         (
             "agent_type".to_string(),
@@ -592,7 +618,7 @@ fn spawn_agent_tool_description(
     let tool_description = format!(
         r#"
         {agent_role_guidance}
-        Spawn a sub-agent for a well-scoped task. {return_value_description}"#
+        Spawn a sub-agent for a well-scoped task. This call blocks by default until the child agent reaches a turn boundary and hands control back to the parent. Set `blocking` to false when you intentionally want background execution. {return_value_description}"#
     );
 
     if !include_usage_hint {
@@ -660,7 +686,7 @@ fn spawn_agent_tool_description_v2(
     let tool_description = format!(
         r#"
         {agent_role_guidance}
-        Spawns an agent to work on the specified task. If your current task is `/root/task1` and you spawn_agent with task_name "task_3" the agent will have canonical task name `/root/task1/task_3`.
+        Spawns an agent to work on the specified task. This call blocks by default until the child agent reaches a turn boundary and hands control back to the parent. Set `blocking` to false when you intentionally want background execution. If your current task is `/root/task1` and you spawn_agent with task_name "task_3" the agent will have canonical task name `/root/task1/task_3`.
 You are then able to refer to this agent as `task_3` or `/root/task1/task_3` interchangeably. However an agent `/root/task2/task_3` would only be able to communicate with this agent via its canonical name `/root/task1/task_3`.
 The spawned agent will have the same tools as you and the ability to spawn its own subagents.
 It will be able to send you and other running agents messages, and its final answer will be provided to you when it finishes.

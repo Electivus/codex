@@ -661,7 +661,7 @@ fn spawn_agent_description_omits_usage_hint_when_disabled() {
         r#"(?sx)
             ^\s*
             No\ picker-visible\ models\ are\ currently\ loaded\.
-            \s+Spawns\ an\ agent\ to\ work\ on\ the\ specified\ task\.\ If\ your\ current\ task\ is\ `/root/task1`\ and\ you\ spawn_agent\ with\ task_name\ "task_3"\ the\ agent\ will\ have\ canonical\ task\ name\ `/root/task1/task_3`\.
+            \s+Spawns\ an\ agent\ to\ work\ on\ the\ specified\ task\.\ This\ call\ blocks\ by\ default\ until\ the\ child\ agent\ reaches\ a\ turn\ boundary\ and\ hands\ control\ back\ to\ the\ parent\.\ Set\ `blocking`\ to\ false\ when\ you\ intentionally\ want\ background\ execution\.\ If\ your\ current\ task\ is\ `/root/task1`\ and\ you\ spawn_agent\ with\ task_name\ "task_3"\ the\ agent\ will\ have\ canonical\ task\ name\ `/root/task1/task_3`\.
             \s+You\ are\ then\ able\ to\ refer\ to\ this\ agent\ as\ `task_3`\ or\ `/root/task1/task_3`\ interchangeably\.\ However\ an\ agent\ `/root/task2/task_3`\ would\ only\ be\ able\ to\ communicate\ with\ this\ agent\ via\ its\ canonical\ name\ `/root/task1/task_3`\.
             \s+The\ spawned\ agent\ will\ have\ the\ same\ tools\ as\ you\ and\ the\ ability\ to\ spawn\ its\ own\ subagents\.
             \s+It\ will\ be\ able\ to\ send\ you\ and\ other\ running\ agents\ messages,\ and\ its\ final\ answer\ will\ be\ provided\ to\ you\ when\ it\ finishes\.
@@ -683,7 +683,7 @@ fn spawn_agent_description_uses_configured_usage_hint_text() {
         r#"(?sx)
             ^\s*
             No\ picker-visible\ models\ are\ currently\ loaded\.
-            \s+Spawns\ an\ agent\ to\ work\ on\ the\ specified\ task\.\ If\ your\ current\ task\ is\ `/root/task1`\ and\ you\ spawn_agent\ with\ task_name\ "task_3"\ the\ agent\ will\ have\ canonical\ task\ name\ `/root/task1/task_3`\.
+            \s+Spawns\ an\ agent\ to\ work\ on\ the\ specified\ task\.\ This\ call\ blocks\ by\ default\ until\ the\ child\ agent\ reaches\ a\ turn\ boundary\ and\ hands\ control\ back\ to\ the\ parent\.\ Set\ `blocking`\ to\ false\ when\ you\ intentionally\ want\ background\ execution\.\ If\ your\ current\ task\ is\ `/root/task1`\ and\ you\ spawn_agent\ with\ task_name\ "task_3"\ the\ agent\ will\ have\ canonical\ task\ name\ `/root/task1/task_3`\.
             \s+You\ are\ then\ able\ to\ refer\ to\ this\ agent\ as\ `task_3`\ or\ `/root/task1/task_3`\ interchangeably\.\ However\ an\ agent\ `/root/task2/task_3`\ would\ only\ be\ able\ to\ communicate\ with\ this\ agent\ via\ its\ canonical\ name\ `/root/task1/task_3`\.
             \s+The\ spawned\ agent\ will\ have\ the\ same\ tools\ as\ you\ and\ the\ ability\ to\ spawn\ its\ own\ subagents\.
             \s+It\ will\ be\ able\ to\ send\ you\ and\ other\ running\ agents\ messages,\ and\ its\ final\ answer\ will\ be\ provided\ to\ you\ when\ it\ finishes\.

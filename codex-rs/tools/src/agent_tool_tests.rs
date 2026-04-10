@@ -60,9 +60,12 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
         .as_ref()
         .expect("spawn_agent should use object params");
     assert!(description.contains("Spawns an agent to work on the specified task."));
+    assert!(description.contains("blocks by default"));
+    assert!(description.contains("Set `blocking` to false"));
     assert!(description.contains("The spawned agent will have the same tools as you"));
     assert!(description.contains("visible display (`visible-model`)"));
     assert!(!description.contains("hidden display (`hidden-model`)"));
+    assert!(properties.contains_key("blocking"));
     assert!(properties.contains_key("task_name"));
     assert!(properties.contains_key("message"));
     assert!(properties.contains_key("fork_turns"));
@@ -78,7 +81,7 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
     );
     assert_eq!(
         output_schema.expect("spawn_agent output schema")["required"],
-        json!(["task_name", "nickname"])
+        json!(["task_name", "nickname", "status"])
     );
 }
 
@@ -92,7 +95,13 @@ fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
         usage_hint_text: None,
     });
 
-    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = tool else {
+    let ToolSpec::Function(ResponsesApiTool {
+        description,
+        parameters,
+        output_schema,
+        ..
+    }) = tool
+    else {
         panic!("spawn_agent should be a function tool");
     };
     assert_eq!(
@@ -104,8 +113,15 @@ fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
         .as_ref()
         .expect("spawn_agent should use object params");
 
+    assert!(description.contains("blocks by default"));
+    assert!(description.contains("Set `blocking` to false"));
+    assert!(properties.contains_key("blocking"));
     assert!(properties.contains_key("fork_context"));
     assert!(!properties.contains_key("fork_turns"));
+    assert_eq!(
+        output_schema.expect("spawn_agent output schema")["required"],
+        json!(["agent_id", "nickname", "status"])
+    );
 }
 
 #[test]
