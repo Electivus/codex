@@ -93,3 +93,39 @@ async fn auto_completion_ignores_stale_running_status_without_active_turn() {
         vec![record]
     );
 }
+
+#[tokio::test]
+async fn wake_completion_consumes_late_completion_eligibility_once() {
+    let (session, turn) = make_session_and_context().await;
+    let session = Arc::new(session);
+
+    let late_completion_eligible = Arc::new(AtomicBool::new(true));
+    let record = BackgroundProcessCompletionRecord {
+        call_id: "call-wake-once".to_string(),
+        process_id: 99,
+        originating_turn_id: turn.sub_id.clone(),
+        cwd: turn.cwd.to_path_buf(),
+        command: "printf queued".to_string(),
+        exit_code: 0,
+        duration_ms: i64::try_from(Duration::from_millis(250).as_millis()).unwrap(),
+        status: BackgroundProcessCompletionStatus::Completed,
+        completion_behavior: CompletionBehavior::Wake,
+        is_subagent: false,
+        aggregated_output_tail: "queued".to_string(),
+    };
+
+    maybe_queue_background_completion(&session, &late_completion_eligible, record.clone()).await;
+
+    assert_eq!(
+        session.take_pending_background_process_completions().await,
+        vec![record.clone()]
+    );
+
+    maybe_queue_background_completion(&session, &late_completion_eligible, record).await;
+
+    assert!(
+        !session
+            .has_queued_background_process_completions_for_next_turn()
+            .await
+    );
+}

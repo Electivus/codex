@@ -208,7 +208,7 @@ pub(super) async fn maybe_queue_background_completion(
     late_completion_eligible: &Arc<AtomicBool>,
     record: BackgroundProcessCompletionRecord,
 ) {
-    if !late_completion_eligible.load(Ordering::Relaxed) {
+    if !late_completion_eligible.swap(false, Ordering::Relaxed) {
         return;
     }
 

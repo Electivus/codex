@@ -359,7 +359,9 @@ pub(crate) struct BackgroundProcessCompletedCommandInput {
     pub command: String,
     pub exit_code: i32,
     pub duration_ms: i64,
+    #[schemars(schema_with = "background_process_completed_status_schema")]
     pub status: String,
+    #[schemars(schema_with = "completion_behavior_schema")]
     pub completion_behavior: String,
     pub is_subagent: bool,
     pub aggregated_output_tail: String,
@@ -547,6 +549,14 @@ fn permission_mode_schema(_gen: &mut SchemaGenerator) -> Schema {
         "dontAsk",
         "bypassPermissions",
     ])
+}
+
+fn background_process_completed_status_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_enum_schema(&["completed", "failed"])
+}
+
+fn completion_behavior_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_enum_schema(&["auto", "wake", "ignore"])
 }
 
 fn session_start_source_schema(_gen: &mut SchemaGenerator) -> Schema {
@@ -740,5 +750,23 @@ mod tests {
         assert_eq!(json["permission_mode"], "bypassPermissions");
         assert_eq!(json["command"], "cargo test -p codex-core");
         assert_eq!(json["completion_behavior"], "wake");
+    }
+
+    #[test]
+    fn background_process_completed_command_input_schema_constrains_fixed_strings() {
+        let schema: Value = serde_json::from_slice(
+            &schema_json::<BackgroundProcessCompletedCommandInput>()
+                .expect("serialize background process completed input schema"),
+        )
+        .expect("parse background process completed input schema");
+
+        assert_eq!(
+            schema["properties"]["status"]["enum"],
+            serde_json::json!(["completed", "failed"])
+        );
+        assert_eq!(
+            schema["properties"]["completion_behavior"]["enum"],
+            serde_json::json!(["auto", "wake", "ignore"])
+        );
     }
 }

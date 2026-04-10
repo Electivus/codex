@@ -983,7 +983,7 @@ async fn backfill_late_completion_after_arming(params: LateCompletionBackfill<'_
     let aggregated_output_tail = {
         let guard = transcript.lock().await;
         let output = String::from_utf8_lossy(&guard.to_bytes()).to_string();
-        bounded_output_tail(&output)
+        backfilled_aggregated_output_tail(&output, failure_message.as_deref())
     };
 
     maybe_queue_background_completion(
@@ -1004,6 +1004,15 @@ async fn backfill_late_completion_after_arming(params: LateCompletionBackfill<'_
         },
     )
     .await;
+}
+
+fn backfilled_aggregated_output_tail(output: &str, failure_message: Option<&str>) -> String {
+    let aggregated_output = match failure_message {
+        Some(message) if output.is_empty() => message.to_string(),
+        Some(message) => format!("{output}\n{message}"),
+        None => output.to_string(),
+    };
+    bounded_output_tail(&aggregated_output)
 }
 
 enum ProcessStatus {

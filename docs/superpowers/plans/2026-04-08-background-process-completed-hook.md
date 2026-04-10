@@ -68,13 +68,13 @@
   Bundled skill guidance for when to use `completion_behavior = wake` versus same-turn watch ownership.
 - `.codex/skills/babysit-pr/agents/openai.yaml`
   Bundled agent prompt guidance so the default babysitter prompt uses the new runtime capability deliberately.
-- `/home/k3/git/babysit-pr-skill/SKILL.md`
+- `<path-to-babysit-pr-skill>/SKILL.md`
   Standalone skill contract update for resumable background monitoring.
-- `/home/k3/git/babysit-pr-skill/README.md`
+- `<path-to-babysit-pr-skill>/README.md`
   Standalone docs update so install-time behavior matches the runtime contract.
-- `/home/k3/git/babysit-pr-skill/agents/openai.yaml`
+- `<path-to-babysit-pr-skill>/agents/openai.yaml`
   Standalone agent prompt alignment with the new `completion_behavior` guidance.
-- `/home/k3/git/babysit-pr-skill/tests/test_skill_contract.py`
+- `<path-to-babysit-pr-skill>/tests/test_skill_contract.py`
   New lightweight documentation-contract test that keeps `SKILL.md`, `README.md`, and the agent prompt aligned on `completion_behavior = wake`.
 
 ### Task 1: Add the New Hook Event Surface
@@ -689,10 +689,10 @@ git commit -m "feat: run background completion hooks before follow-up turns"
 **Files:**
 - Modify: `.codex/skills/babysit-pr/SKILL.md`
 - Modify: `.codex/skills/babysit-pr/agents/openai.yaml`
-- Modify: `/home/k3/git/babysit-pr-skill/SKILL.md`
-- Modify: `/home/k3/git/babysit-pr-skill/README.md`
-- Modify: `/home/k3/git/babysit-pr-skill/agents/openai.yaml`
-- Create: `/home/k3/git/babysit-pr-skill/tests/test_skill_contract.py`
+- Modify: `<path-to-babysit-pr-skill>/SKILL.md`
+- Modify: `<path-to-babysit-pr-skill>/README.md`
+- Modify: `<path-to-babysit-pr-skill>/agents/openai.yaml`
+- Create: `<path-to-babysit-pr-skill>/tests/test_skill_contract.py`
 
 - [ ] **Step 1: Write the failing standalone skill contract test**
 
@@ -721,7 +721,7 @@ if __name__ == "__main__":
 
 - [ ] **Step 2: Run the standalone skill tests to verify they fail**
 
-Run: `python3 -m unittest /home/k3/git/babysit-pr-skill/tests/test_skill_contract.py -v`
+Run: `python3 -m unittest <path-to-babysit-pr-skill>/tests/test_skill_contract.py -v`
 Expected: FAIL because the docs and agent prompt do not mention `completion_behavior = wake` yet.
 
 - [ ] **Step 3: Update bundled and standalone skill guidance**
@@ -743,10 +743,10 @@ For `babysit-pr --watch`:
 
 - [ ] **Step 4: Rerun the standalone test and a focused bundled-skill sanity check**
 
-Run: `python3 -m unittest /home/k3/git/babysit-pr-skill/tests/test_skill_contract.py -v`
+Run: `python3 -m unittest <path-to-babysit-pr-skill>/tests/test_skill_contract.py -v`
 Expected: PASS
 
-Run: `python3 -m unittest discover -s /home/k3/git/babysit-pr-skill/tests -p "test_*.py"`
+Run: `python3 -m unittest discover -s <path-to-babysit-pr-skill>/tests -p "test_*.py"`
 Expected: PASS
 
 - [ ] **Step 5: Commit the bundled Codex skill updates**
@@ -759,7 +759,7 @@ git commit -m "docs: teach bundled babysit-pr about resumable watches"
 - [ ] **Step 6: Commit the standalone `babysit-pr-skill` updates**
 
 ```bash
-cd /home/k3/git/babysit-pr-skill
+cd <path-to-babysit-pr-skill>
 git add SKILL.md README.md agents/openai.yaml tests/test_skill_contract.py
 git commit -m "docs: teach babysit-pr-skill about resumable watches"
 ```
@@ -772,7 +772,7 @@ git commit -m "docs: teach babysit-pr-skill about resumable watches"
 - Test: `codex-rs/core/tests/suite/hooks.rs`
 - Test: `codex-rs/tools/src/local_tool_tests.rs`
 - Test: `codex-rs/hooks/src/schema.rs`
-- Test: `/home/k3/git/babysit-pr-skill/tests/test_skill_contract.py`
+- Test: `<path-to-babysit-pr-skill>/tests/test_skill_contract.py`
 
 - [ ] **Step 1: Run the focused Rust crate suites**
 
@@ -821,12 +821,12 @@ Expected: PASS
 
 - [ ] **Step 4: Run the standalone skill suite once more after docs updates**
 
-Run: `python3 -m unittest discover -s /home/k3/git/babysit-pr-skill/tests -p "test_*.py"`
+Run: `python3 -m unittest discover -s <path-to-babysit-pr-skill>/tests -p "test_*.py"`
 Expected: PASS
 
 - [ ] **Step 5: Verify both repositories are clean after the slice commits**
 
 ```bash
 git status --short
-cd /home/k3/git/babysit-pr-skill && git status --short
+cd <path-to-babysit-pr-skill> && git status --short
 ```

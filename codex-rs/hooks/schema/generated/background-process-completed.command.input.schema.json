@@ -20,6 +20,11 @@
       "type": "string"
     },
     "completion_behavior": {
+      "enum": [
+        "auto",
+        "wake",
+        "ignore"
+      ],
       "type": "string"
     },
     "cwd": {
@@ -63,6 +68,10 @@
       "type": "string"
     },
     "status": {
+      "enum": [
+        "completed",
+        "failed"
+      ],
       "type": "string"
     },
     "transcript_path": {

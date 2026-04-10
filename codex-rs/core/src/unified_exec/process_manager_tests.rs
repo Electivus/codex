@@ -281,3 +281,19 @@ async fn backfill_late_completion_after_arming_queues_already_exited_process() -
     manager.release_process_id(process_id).await;
     Ok(())
 }
+
+#[test]
+fn backfilled_aggregated_output_tail_uses_failure_message_without_stdout() {
+    assert_eq!(
+        backfilled_aggregated_output_tail("", Some("process failed")),
+        "process failed"
+    );
+}
+
+#[test]
+fn backfilled_aggregated_output_tail_appends_failure_message_after_stdout() {
+    assert_eq!(
+        backfilled_aggregated_output_tail("stdout", Some("process failed")),
+        "stdout\nprocess failed"
+    );
+}

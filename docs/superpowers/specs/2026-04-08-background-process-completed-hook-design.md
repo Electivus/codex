@@ -203,9 +203,9 @@ Update prompt and skill guidance so Codex learns this pattern:
 
 The `babysit-pr` skill in both locations must be updated:
 
-- `/home/k3/git/codex/.codex/skills/babysit-pr/SKILL.md`
-- `/home/k3/git/babysit-pr-skill/SKILL.md`
-- `/home/k3/git/babysit-pr-skill/README.md`
+- `.codex/skills/babysit-pr/SKILL.md`
+- `<path-to-babysit-pr-skill>/SKILL.md`
+- `<path-to-babysit-pr-skill>/README.md`
 
 Those updates should teach the skill to request resumable background behavior when it intentionally hands a watcher or long poller back to the runtime.
 
