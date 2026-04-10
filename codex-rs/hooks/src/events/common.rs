@@ -74,9 +74,10 @@ pub(crate) fn matcher_pattern_for_event(
     matcher: Option<&str>,
 ) -> Option<&str> {
     match event_name {
-        HookEventName::PreToolUse | HookEventName::PostToolUse | HookEventName::SessionStart => {
-            matcher
-        }
+        HookEventName::PreToolUse
+        | HookEventName::PostToolUse
+        | HookEventName::SessionStart
+        | HookEventName::BackgroundProcessCompleted => matcher,
         HookEventName::UserPromptSubmit | HookEventName::Stop => None,
     }
 }
@@ -181,6 +182,17 @@ mod tests {
         assert_eq!(
             matcher_pattern_for_event(HookEventName::SessionStart, Some("startup|resume")),
             Some("startup|resume")
+        );
+    }
+
+    #[test]
+    fn supported_events_keep_background_process_completed_matchers() {
+        assert_eq!(
+            matcher_pattern_for_event(
+                HookEventName::BackgroundProcessCompleted,
+                Some("^cargo test$"),
+            ),
+            Some("^cargo test$")
         );
     }
 }

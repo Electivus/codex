@@ -1425,6 +1425,7 @@ pub enum HookEventName {
     PreToolUse,
     PostToolUse,
     SessionStart,
+    BackgroundProcessCompleted,
     UserPromptSubmit,
     Stop,
 }

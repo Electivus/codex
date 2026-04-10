@@ -21,6 +21,14 @@ Accept any of the following:
 - PR number
 - PR URL
 
+## Background Resume
+
+- When you intentionally launch a long-running watcher, build, or test command that Codex must revisit after the current turn ends, call `exec_command` with `completion_behavior = wake`.
+- Use `completion_behavior = auto` only when a late follow-up would be useful but not required.
+- Use `completion_behavior = ignore` for fire-and-forget commands.
+- For `babysit-pr --watch`, prefer same-turn ownership while you are actively consuming streamed watch output. If you intentionally hand passive waiting back to the runtime, relaunch `--watch` with `completion_behavior = wake`.
+- Do not claim automatic resume unless the watch command was launched with `completion_behavior = wake`.
+
 ## Core Workflow
 
 1. When the user asks to "monitor"/"watch"/"babysit" a PR, start with the watcher's continuous mode (`--watch`) unless you are intentionally doing a one-shot diagnostic snapshot.
@@ -35,9 +43,9 @@ Accept any of the following:
 10. If both actionable review feedback and `retry_failed_checks` are present, prioritize review feedback first; a new commit will retrigger CI, so avoid rerunning flaky checks on the old SHA unless you intentionally defer the review change.
 11. On every loop, look for newly surfaced review feedback before acting on CI failures or mergeability state, then verify mergeability / merge-conflict status (for example via `gh pr view`) alongside CI.
 12. After any push or rerun action, immediately return to step 1 and continue polling on the updated SHA/state.
-13. If you had been using `--watch` before pausing to patch/commit/push, relaunch `--watch` yourself in the same turn immediately after the push (do not wait for the user to re-invoke the skill).
+13. If you had been using `--watch` before pausing to patch/commit/push, relaunch `--watch` yourself in the same turn immediately after the push (do not wait for the user to re-invoke the skill). If the next phase is passive waiting that you intentionally want the runtime to own, relaunch it with `completion_behavior = wake`.
 14. Repeat polling until `stop_pr_closed` appears or a user-help-required blocker is reached. A green + review-clean + mergeable PR is a progress milestone, not a reason to stop the watcher while the PR is still open.
-15. Maintain terminal/session ownership: while babysitting is active, keep consuming watcher output in the same turn; do not leave a detached `--watch` process running and then end the turn as if monitoring were complete.
+15. Maintain ownership deliberately: while actively babysitting a live `--watch` stream in the current turn, keep consuming watcher output. If you intentionally hand passive waiting back to the runtime, do it via `exec_command` with `completion_behavior = wake` instead of detaching `--watch` without a resume path.
 
 ## Commands
 

@@ -30,6 +30,16 @@ pub fn create_exec_command_tool(options: CommandToolOptions) -> ToolSpec {
             )),
         ),
         (
+            "completion_behavior".to_string(),
+            JsonSchema::string_enum(
+                vec![json!("auto"), json!("wake"), json!("ignore")],
+                Some(
+                    "Whether Codex should create a follow-up turn when the process completes after the original turn. Defaults to \"auto\". Use \"wake\" for long-running work Codex intends to revisit, and \"ignore\" for fire-and-forget commands."
+                        .to_string(),
+                ),
+            ),
+        ),
+        (
             "shell".to_string(),
             JsonSchema::string(Some(
                 "Shell binary to launch. Defaults to the user's default shell.".to_string(),

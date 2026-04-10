@@ -1,4 +1,5 @@
 use super::*;
+use crate::background_process_completion::CompletionBehavior;
 use crate::shell::default_user_shell;
 use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::handlers::resolve_workdir_base_path;
@@ -194,6 +195,23 @@ fn exec_command_args_resolve_relative_additional_permissions_against_workdir() -
             ..Default::default()
         })
     );
+    Ok(())
+}
+
+#[test]
+fn exec_command_args_default_completion_behavior_to_auto() -> anyhow::Result<()> {
+    let args: ExecCommandArgs = parse_arguments(r#"{"cmd":"cargo test"}"#)?;
+
+    assert_eq!(args.completion_behavior, CompletionBehavior::Auto);
+    Ok(())
+}
+
+#[test]
+fn exec_command_args_accept_explicit_wake_behavior() -> anyhow::Result<()> {
+    let args: ExecCommandArgs =
+        parse_arguments(r#"{"cmd":"cargo test","completion_behavior":"wake"}"#)?;
+
+    assert_eq!(args.completion_behavior, CompletionBehavior::Wake);
     Ok(())
 }
 

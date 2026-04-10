@@ -254,6 +254,9 @@ impl Session {
         let cancellation_token = CancellationToken::new();
         let done = Arc::new(Notify::new());
 
+        let queued_background_process_completions = self
+            .take_queued_background_process_completions_for_next_turn()
+            .await;
         let queued_response_items = self.take_queued_response_items_for_next_turn().await;
         let mailbox_items = self.get_pending_input().await;
         let turn_state = {
@@ -265,6 +268,9 @@ impl Session {
         {
             let mut turn_state = turn_state.lock().await;
             turn_state.token_usage_at_turn_start = token_usage_at_turn_start;
+            for completion in queued_background_process_completions {
+                turn_state.push_pending_background_process_completion(completion);
+            }
             for item in queued_response_items {
                 turn_state.push_pending_input(item);
             }
@@ -350,6 +356,9 @@ impl Session {
         sub_id: String,
     ) {
         if !self.has_queued_response_items_for_next_turn().await
+            && !self
+                .has_queued_background_process_completions_for_next_turn()
+                .await
             && !self.has_trigger_turn_mailbox_items().await
         {
             return;
@@ -394,6 +403,7 @@ impl Session {
             .cancel_git_enrichment_task();
 
         let mut pending_input = Vec::<ResponseInputItem>::new();
+        let mut pending_background_process_completions = Vec::new();
         let mut should_clear_active_turn = false;
         let mut token_usage_at_turn_start = None;
         let mut turn_tool_calls = 0_u64;
@@ -415,8 +425,15 @@ impl Session {
         if let Some(turn_state) = turn_state {
             let mut ts = turn_state.lock().await;
             pending_input = ts.take_pending_input();
+            pending_background_process_completions =
+                ts.take_pending_background_process_completions();
             turn_tool_calls = ts.tool_calls;
             token_usage_at_turn_start = Some(ts.token_usage_at_turn_start.clone());
+        }
+        for completion in pending_background_process_completions {
+            let _ = self
+                .queue_background_process_completion_for_next_turn(completion)
+                .await;
         }
         if !pending_input.is_empty() {
             for pending_input_item in pending_input {

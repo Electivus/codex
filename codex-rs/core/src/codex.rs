@@ -255,6 +255,7 @@ use crate::SkillInjections;
 use crate::SkillLoadOutcome;
 use crate::SkillMetadata;
 use crate::SkillsManager;
+use crate::background_process_completion::BackgroundProcessCompletionRecord;
 use crate::build_skill_injections;
 use crate::collect_env_var_dependencies;
 use crate::collect_explicit_skill_mentions;
@@ -264,6 +265,7 @@ use crate::guardian::GuardianReviewSessionManager;
 use crate::hook_runtime::PendingInputHookDisposition;
 use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
+use crate::hook_runtime::record_background_process_completion;
 use crate::hook_runtime::record_pending_input;
 use crate::hook_runtime::run_pending_session_start_hooks;
 use crate::hook_runtime::run_user_prompt_submit_hooks;
@@ -4273,6 +4275,53 @@ impl Session {
         !self.idle_pending_input.lock().await.is_empty()
     }
 
+    pub(crate) async fn queue_background_process_completion_for_next_turn(
+        &self,
+        record: BackgroundProcessCompletionRecord,
+    ) -> bool {
+        let mut state = self.state.lock().await;
+        state.queue_background_process_completion(record)
+    }
+
+    pub(crate) async fn take_queued_background_process_completions_for_next_turn(
+        &self,
+    ) -> Vec<BackgroundProcessCompletionRecord> {
+        let mut state = self.state.lock().await;
+        state.take_pending_background_process_completions()
+    }
+
+    pub(crate) async fn has_queued_background_process_completions_for_next_turn(&self) -> bool {
+        let state = self.state.lock().await;
+        state.has_pending_background_process_completions()
+    }
+
+    pub(crate) async fn take_pending_background_process_completions(
+        &self,
+    ) -> Vec<BackgroundProcessCompletionRecord> {
+        let active = self.active_turn.lock().await;
+        let Some(active_turn) = active.as_ref() else {
+            return Vec::new();
+        };
+        let mut turn_state = active_turn.turn_state.lock().await;
+        turn_state.take_pending_background_process_completions()
+    }
+
+    pub(crate) async fn has_pending_background_process_completions(&self) -> bool {
+        let active = self.active_turn.lock().await;
+        match active.as_ref() {
+            Some(active_turn) => active_turn
+                .turn_state
+                .lock()
+                .await
+                .has_pending_background_process_completions(),
+            None => false,
+        }
+    }
+
+    pub(crate) async fn has_active_turn(&self) -> bool {
+        self.active_turn.lock().await.is_some()
+    }
+
     pub async fn has_pending_input(&self) -> bool {
         let (has_turn_pending_input, accepts_mailbox_delivery) = {
             let active = self.active_turn.lock().await;
@@ -5863,7 +5912,10 @@ pub(crate) async fn run_turn(
     prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
 ) -> Option<String> {
-    if input.is_empty() && !sess.has_pending_input().await {
+    if input.is_empty()
+        && !sess.has_pending_input().await
+        && !sess.has_pending_background_process_completions().await
+    {
         return None;
     }
 
@@ -6009,7 +6061,10 @@ pub(crate) async fn run_turn(
         })
         .collect::<Vec<_>>();
 
-    if run_pending_session_start_hooks(&sess, &turn_context).await {
+    let startup_hook_should_stop = run_pending_session_start_hooks(&sess, &turn_context).await;
+    let background_completion_hook_should_stop =
+        drain_pending_background_process_completions(&sess, &turn_context).await;
+    if startup_hook_should_stop || background_completion_hook_should_stop {
         return None;
     }
     let additional_contexts = if input.is_empty() {
@@ -6083,7 +6138,11 @@ pub(crate) async fn run_turn(
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
 
     loop {
-        if run_pending_session_start_hooks(&sess, &turn_context).await {
+        let session_start_hook_should_stop =
+            run_pending_session_start_hooks(&sess, &turn_context).await;
+        let background_completion_hook_should_stop =
+            drain_pending_background_process_completions(&sess, &turn_context).await;
+        if session_start_hook_should_stop || background_completion_hook_should_stop {
             break;
         }
 
@@ -6355,6 +6414,20 @@ pub(crate) async fn run_turn(
     }
 
     last_agent_message
+}
+
+async fn drain_pending_background_process_completions(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+) -> bool {
+    let pending_background_process_completions =
+        sess.take_pending_background_process_completions().await;
+    for completion in pending_background_process_completions {
+        if record_background_process_completion(sess, turn_context, completion).await {
+            return true;
+        }
+    }
+    false
 }
 
 async fn run_pre_sampling_compact(

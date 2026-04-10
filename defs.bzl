@@ -175,6 +175,10 @@ def codex_rust_crate(
         # `codex-rs` checkout.
         "INSTA_WORKSPACE_ROOT": ".",
         "INSTA_SNAPSHOT_PATH": "src",
+        # Prefer predictable low-memory execution over throughput, especially
+        # on smaller CI runners where libtest's default parallelism can cause
+        # timeouts or process starvation.
+        "RUST_TEST_THREADS": "1",
     }
 
     native.filegroup(
@@ -325,7 +329,7 @@ def codex_rust_crate(
             # Important: do not merge `test_env` here. Its unit-test-only
             # `INSTA_WORKSPACE_ROOT="codex-rs"` is tuned for unit tests that
             # execute from the repo root and can misplace integration snapshots.
-            env = cargo_env,
+            env = cargo_env | {"RUST_TEST_THREADS": "1"},
             tags = test_tags,
             **integration_test_kwargs
         )

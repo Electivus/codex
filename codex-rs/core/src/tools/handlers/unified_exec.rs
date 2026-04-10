@@ -1,3 +1,4 @@
+use crate::background_process_completion::CompletionBehavior;
 use crate::function_tool::FunctionCallError;
 use crate::maybe_emit_implicit_skill_invocation;
 use crate::sandboxing::SandboxPermissions;
@@ -42,6 +43,8 @@ pub(crate) struct ExecCommandArgs {
     cmd: String,
     #[serde(default)]
     pub(crate) workdir: Option<String>,
+    #[serde(default)]
+    pub(crate) completion_behavior: CompletionBehavior,
     #[serde(default)]
     shell: Option<String>,
     #[serde(default)]
@@ -211,7 +214,9 @@ impl ToolHandler for UnifiedExecHandler {
                 let command_for_display = codex_shell_command::parse_command::shlex_join(&command);
 
                 let ExecCommandArgs {
+                    cmd,
                     workdir,
+                    completion_behavior,
                     tty,
                     yield_time_ms,
                     max_output_tokens,
@@ -322,8 +327,10 @@ impl ToolHandler for UnifiedExecHandler {
                 manager
                     .exec_command(
                         ExecCommandRequest {
+                            raw_command: cmd,
                             command,
                             process_id,
+                            completion_behavior,
                             yield_time_ms,
                             max_output_tokens,
                             workdir,

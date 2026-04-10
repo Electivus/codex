@@ -1,0 +1,101 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "NullableString": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "properties": {
+    "aggregated_output_tail": {
+      "type": "string"
+    },
+    "call_id": {
+      "type": "string"
+    },
+    "command": {
+      "type": "string"
+    },
+    "completion_behavior": {
+      "enum": [
+        "auto",
+        "wake",
+        "ignore"
+      ],
+      "type": "string"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "duration_ms": {
+      "format": "int64",
+      "type": "integer"
+    },
+    "exit_code": {
+      "format": "int32",
+      "type": "integer"
+    },
+    "hook_event_name": {
+      "const": "BackgroundProcessCompleted",
+      "type": "string"
+    },
+    "is_subagent": {
+      "type": "boolean"
+    },
+    "model": {
+      "type": "string"
+    },
+    "originating_turn_id": {
+      "type": "string"
+    },
+    "permission_mode": {
+      "enum": [
+        "default",
+        "acceptEdits",
+        "plan",
+        "dontAsk",
+        "bypassPermissions"
+      ],
+      "type": "string"
+    },
+    "process_id": {
+      "type": "string"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "completed",
+        "failed"
+      ],
+      "type": "string"
+    },
+    "transcript_path": {
+      "$ref": "#/definitions/NullableString"
+    }
+  },
+  "required": [
+    "aggregated_output_tail",
+    "call_id",
+    "command",
+    "completion_behavior",
+    "cwd",
+    "duration_ms",
+    "exit_code",
+    "hook_event_name",
+    "is_subagent",
+    "model",
+    "originating_turn_id",
+    "permission_mode",
+    "process_id",
+    "session_id",
+    "status",
+    "transcript_path"
+  ],
+  "title": "background-process-completed.command.input",
+  "type": "object"
+}

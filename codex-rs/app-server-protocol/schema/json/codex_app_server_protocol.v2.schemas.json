@@ -5101,6 +5101,7 @@
         "preToolUse",
         "postToolUse",
         "sessionStart",
+        "backgroundProcessCompleted",
         "userPromptSubmit",
         "stop"
       ],

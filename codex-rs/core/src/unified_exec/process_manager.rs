@@ -2,6 +2,7 @@ use rand::Rng;
 use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -12,6 +13,10 @@ use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
+use crate::background_process_completion::BackgroundProcessCompletionRecord;
+use crate::background_process_completion::BackgroundProcessCompletionStatus;
+use crate::background_process_completion::CompletionBehavior;
+use crate::background_process_completion::bounded_output_tail;
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::sandboxing::ExecRequest;
@@ -39,6 +44,7 @@ use crate::unified_exec::WARNING_UNIFIED_EXEC_PROCESSES;
 use crate::unified_exec::WriteStdinRequest;
 use crate::unified_exec::async_watcher::emit_exec_end_for_unified_exec;
 use crate::unified_exec::async_watcher::emit_failed_exec_end_for_unified_exec;
+use crate::unified_exec::async_watcher::maybe_queue_background_completion;
 use crate::unified_exec::async_watcher::spawn_exit_watcher;
 use crate::unified_exec::async_watcher::start_streaming_output;
 use crate::unified_exec::clamp_yield_time;
@@ -49,6 +55,7 @@ use crate::unified_exec::process::OutputHandles;
 use crate::unified_exec::process::SpawnLifecycleHandle;
 use crate::unified_exec::process::UnifiedExecProcess;
 use codex_protocol::protocol::ExecCommandSource;
+use codex_protocol::protocol::SessionSource;
 use codex_utils_output_truncation::approx_token_count;
 
 const UNIFIED_EXEC_ENV: [(&str, &str); 10] = [
@@ -76,6 +83,18 @@ pub(super) fn set_deterministic_process_ids_for_tests(enabled: bool) {
 
 fn deterministic_process_ids_forced_for_tests() -> bool {
     FORCE_DETERMINISTIC_PROCESS_IDS.load(Ordering::Relaxed)
+}
+
+struct LateCompletionBackfill<'a> {
+    context: &'a UnifiedExecContext,
+    process: &'a Arc<UnifiedExecProcess>,
+    transcript: &'a Arc<tokio::sync::Mutex<HeadTailBuffer>>,
+    late_completion_eligible: &'a Arc<AtomicBool>,
+    raw_command: &'a str,
+    cwd: &'a Path,
+    process_id: i32,
+    completion_behavior: CompletionBehavior,
+    started_at: Instant,
 }
 
 fn should_use_deterministic_process_ids() -> bool {
@@ -200,23 +219,29 @@ impl UnifiedExecProcessManager {
         // Persist live sessions before the initial yield wait so interrupting the
         // turn cannot drop the last Arc and terminate the background process.
         let process_started_alive = !process.has_exited() && process.exit_code().is_none();
-        if process_started_alive {
+        let late_completion_eligible = if process_started_alive {
             let network_approval_id = deferred_network_approval
                 .as_ref()
                 .map(|deferred| deferred.registration_id().to_string());
-            self.store_process(
-                Arc::clone(&process),
-                context,
-                &request.command,
-                cwd.clone(),
-                start,
-                request.process_id,
-                request.tty,
-                network_approval_id,
-                Arc::clone(&transcript),
+            Some(
+                self.store_process(
+                    Arc::clone(&process),
+                    context,
+                    &request.raw_command,
+                    &request.command,
+                    cwd.clone(),
+                    start,
+                    request.process_id,
+                    request.completion_behavior,
+                    request.tty,
+                    network_approval_id,
+                    Arc::clone(&transcript),
+                )
+                .await,
             )
-            .await;
-        }
+        } else {
+            None
+        };
 
         let yield_time_ms = clamp_yield_time(request.yield_time_ms);
         // For the initial exec_command call, we both stream output to events
@@ -278,7 +303,24 @@ impl UnifiedExecProcessManager {
                     exit_code,
                     process_id,
                     ..
-                } => (Some(process_id), exit_code),
+                } => {
+                    if let Some(late_completion_eligible) = late_completion_eligible.as_ref() {
+                        late_completion_eligible.store(true, Ordering::Relaxed);
+                        backfill_late_completion_after_arming(LateCompletionBackfill {
+                            context,
+                            process: &process,
+                            transcript: &transcript,
+                            late_completion_eligible,
+                            raw_command: &request.raw_command,
+                            cwd: cwd.as_path(),
+                            process_id,
+                            completion_behavior: request.completion_behavior,
+                            started_at: start,
+                        })
+                        .await;
+                    }
+                    (Some(process_id), exit_code)
+                }
                 ProcessStatus::Exited { exit_code, .. } => {
                     process.check_for_sandbox_denial_with_text(&text).await?;
                     (None, exit_code)
@@ -525,18 +567,22 @@ impl UnifiedExecProcessManager {
         &self,
         process: Arc<UnifiedExecProcess>,
         context: &UnifiedExecContext,
+        raw_command: &str,
         command: &[String],
         cwd: PathBuf,
         started_at: Instant,
         process_id: i32,
+        completion_behavior: crate::background_process_completion::CompletionBehavior,
         tty: bool,
         network_approval_id: Option<String>,
         transcript: Arc<tokio::sync::Mutex<HeadTailBuffer>>,
-    ) {
+    ) -> Arc<AtomicBool> {
+        let late_completion_eligible = Arc::new(AtomicBool::new(false));
         let entry = ProcessEntry {
             process: Arc::clone(&process),
             call_id: context.call_id.clone(),
             process_id,
+            completion_behavior,
             command: command.to_vec(),
             tty,
             network_approval_id,
@@ -552,6 +598,11 @@ impl UnifiedExecProcessManager {
         // prune_processes_if_needed runs while holding process_store; do async
         // network-approval cleanup only after dropping that lock.
         if let Some(pruned_entry) = pruned_entry {
+            tracing::trace!(
+                process_id = pruned_entry.process_id,
+                completion_behavior = %pruned_entry.completion_behavior,
+                "pruning unified exec process entry",
+            );
             Self::unregister_network_approval_for_entry(&pruned_entry).await;
             pruned_entry.process.terminate();
         }
@@ -571,14 +622,18 @@ impl UnifiedExecProcessManager {
             Arc::clone(&context.session),
             Arc::clone(&context.turn),
             context.call_id.clone(),
+            raw_command.to_string(),
             command.to_vec(),
             cwd,
             process_id,
+            completion_behavior,
+            Arc::clone(&late_completion_eligible),
             transcript,
             started_at,
         );
-    }
 
+        late_completion_eligible
+    }
     pub(crate) async fn open_session_with_exec_env(
         &self,
         process_id: i32,
@@ -898,6 +953,66 @@ impl UnifiedExecProcessManager {
             entry.process.terminate();
         }
     }
+}
+
+async fn backfill_late_completion_after_arming(params: LateCompletionBackfill<'_>) {
+    let LateCompletionBackfill {
+        context,
+        process,
+        transcript,
+        late_completion_eligible,
+        raw_command,
+        cwd,
+        process_id,
+        completion_behavior,
+        started_at,
+    } = params;
+
+    if !late_completion_eligible.load(Ordering::Relaxed) || !process.has_exited() {
+        return;
+    }
+
+    let failure_message = process.failure_message();
+    let (status, exit_code) = match failure_message {
+        Some(_) => (BackgroundProcessCompletionStatus::Failed, -1),
+        None => (
+            BackgroundProcessCompletionStatus::Completed,
+            process.exit_code().unwrap_or(-1),
+        ),
+    };
+    let aggregated_output_tail = {
+        let guard = transcript.lock().await;
+        let output = String::from_utf8_lossy(&guard.to_bytes()).to_string();
+        backfilled_aggregated_output_tail(&output, failure_message.as_deref())
+    };
+
+    maybe_queue_background_completion(
+        &context.session,
+        late_completion_eligible,
+        BackgroundProcessCompletionRecord {
+            call_id: context.call_id.clone(),
+            process_id,
+            originating_turn_id: context.turn.sub_id.clone(),
+            cwd: cwd.to_path_buf(),
+            command: raw_command.to_string(),
+            exit_code,
+            duration_ms: i64::try_from(started_at.elapsed().as_millis()).unwrap_or(i64::MAX),
+            status,
+            completion_behavior,
+            is_subagent: matches!(context.turn.session_source, SessionSource::SubAgent(_)),
+            aggregated_output_tail,
+        },
+    )
+    .await;
+}
+
+fn backfilled_aggregated_output_tail(output: &str, failure_message: Option<&str>) -> String {
+    let aggregated_output = match failure_message {
+        Some(message) if output.is_empty() => message.to_string(),
+        Some(message) => format!("{output}\n{message}"),
+        None => output.to_string(),
+    };
+    bounded_output_tail(&aggregated_output)
 }
 
 enum ProcessStatus {

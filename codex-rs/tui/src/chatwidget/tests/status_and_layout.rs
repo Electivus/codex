@@ -1392,6 +1392,17 @@ async fn session_start_hook_events_render_snapshot() {
     .await;
 }
 
+#[tokio::test]
+async fn background_process_completed_hook_events_render_snapshot() {
+    assert_hook_events_snapshot(
+        codex_protocol::protocol::HookEventName::BackgroundProcessCompleted,
+        "background-process-completed:0:/tmp/hooks.json",
+        "processing late command completion",
+        "background_process_completed_hook_events_render_snapshot",
+    )
+    .await;
+}
+
 // Combined visual snapshot using vt100 for history + direct buffer overlay for UI.
 // This renders the final visual as seen in a terminal: history above, then a blank line,
 // then the exec block, another blank line, the status line, a blank line, and the composer.

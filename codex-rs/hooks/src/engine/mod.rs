@@ -10,6 +10,8 @@ use std::path::PathBuf;
 use codex_config::ConfigLayerStack;
 use codex_protocol::protocol::HookRunSummary;
 
+use crate::events::background_process_completed::BackgroundProcessCompletedOutcome;
+use crate::events::background_process_completed::BackgroundProcessCompletedRequest;
 use crate::events::post_tool_use::PostToolUseOutcome;
 use crate::events::post_tool_use::PostToolUseRequest;
 use crate::events::pre_tool_use::PreToolUseOutcome;
@@ -54,6 +56,9 @@ impl ConfiguredHandler {
             codex_protocol::protocol::HookEventName::PreToolUse => "pre-tool-use",
             codex_protocol::protocol::HookEventName::PostToolUse => "post-tool-use",
             codex_protocol::protocol::HookEventName::SessionStart => "session-start",
+            codex_protocol::protocol::HookEventName::BackgroundProcessCompleted => {
+                "background-process-completed"
+            }
             codex_protocol::protocol::HookEventName::UserPromptSubmit => "user-prompt-submit",
             codex_protocol::protocol::HookEventName::Stop => "stop",
         }
@@ -101,6 +106,13 @@ impl ClaudeHooksEngine {
         crate::events::session_start::preview(&self.handlers, request)
     }
 
+    pub(crate) fn preview_background_process_completed(
+        &self,
+        request: &BackgroundProcessCompletedRequest,
+    ) -> Vec<HookRunSummary> {
+        crate::events::background_process_completed::preview(&self.handlers, request)
+    }
+
     pub(crate) fn preview_pre_tool_use(&self, request: &PreToolUseRequest) -> Vec<HookRunSummary> {
         crate::events::pre_tool_use::preview(&self.handlers, request)
     }
@@ -118,6 +130,20 @@ impl ClaudeHooksEngine {
         turn_id: Option<String>,
     ) -> SessionStartOutcome {
         crate::events::session_start::run(&self.handlers, &self.shell, request, turn_id).await
+    }
+
+    pub(crate) async fn run_background_process_completed(
+        &self,
+        request: BackgroundProcessCompletedRequest,
+        turn_id: Option<String>,
+    ) -> BackgroundProcessCompletedOutcome {
+        crate::events::background_process_completed::run(
+            &self.handlers,
+            &self.shell,
+            request,
+            turn_id,
+        )
+        .await
     }
 
     pub(crate) async fn run_pre_tool_use(&self, request: PreToolUseRequest) -> PreToolUseOutcome {

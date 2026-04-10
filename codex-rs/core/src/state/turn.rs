@@ -17,6 +17,7 @@ use codex_rmcp_client::ElicitationResponse;
 use rmcp::model::RequestId;
 use tokio::sync::oneshot;
 
+use crate::background_process_completion::BackgroundProcessCompletionRecord;
 use crate::codex::TurnContext;
 use crate::tasks::AnySessionTask;
 use codex_protocol::models::PermissionProfile;
@@ -101,6 +102,7 @@ pub(crate) struct TurnState {
     pending_user_input: HashMap<String, oneshot::Sender<RequestUserInputResponse>>,
     pending_elicitations: HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>,
     pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
+    pending_background_process_completions: Vec<BackgroundProcessCompletionRecord>,
     pending_input: Vec<ResponseInputItem>,
     mailbox_delivery_phase: MailboxDeliveryPhase,
     granted_permissions: Option<PermissionProfile>,
@@ -130,6 +132,7 @@ impl TurnState {
         self.pending_user_input.clear();
         self.pending_elicitations.clear();
         self.pending_dynamic_tools.clear();
+        self.pending_background_process_completions.clear();
         self.pending_input.clear();
     }
 
@@ -201,6 +204,13 @@ impl TurnState {
         self.pending_input.push(input);
     }
 
+    pub(crate) fn push_pending_background_process_completion(
+        &mut self,
+        completion: BackgroundProcessCompletionRecord,
+    ) {
+        self.pending_background_process_completions.push(completion);
+    }
+
     pub(crate) fn prepend_pending_input(&mut self, mut input: Vec<ResponseInputItem>) {
         if input.is_empty() {
             return;
@@ -222,6 +232,22 @@ impl TurnState {
 
     pub(crate) fn has_pending_input(&self) -> bool {
         !self.pending_input.is_empty()
+    }
+
+    pub(crate) fn take_pending_background_process_completions(
+        &mut self,
+    ) -> Vec<BackgroundProcessCompletionRecord> {
+        if self.pending_background_process_completions.is_empty() {
+            Vec::with_capacity(0)
+        } else {
+            let mut ret = Vec::new();
+            std::mem::swap(&mut ret, &mut self.pending_background_process_completions);
+            ret
+        }
+    }
+
+    pub(crate) fn has_pending_background_process_completions(&self) -> bool {
+        !self.pending_background_process_completions.is_empty()
     }
 
     pub(crate) fn accept_mailbox_delivery_for_current_turn(&mut self) {

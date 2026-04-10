@@ -13,6 +13,10 @@ use std::path::Path;
 use std::path::PathBuf;
 
 const GENERATED_DIR: &str = "generated";
+const BACKGROUND_PROCESS_COMPLETED_INPUT_FIXTURE: &str =
+    "background-process-completed.command.input.schema.json";
+const BACKGROUND_PROCESS_COMPLETED_OUTPUT_FIXTURE: &str =
+    "background-process-completed.command.output.schema.json";
 const POST_TOOL_USE_INPUT_FIXTURE: &str = "post-tool-use.command.input.schema.json";
 const POST_TOOL_USE_OUTPUT_FIXTURE: &str = "post-tool-use.command.output.schema.json";
 const PRE_TOOL_USE_INPUT_FIXTURE: &str = "pre-tool-use.command.input.schema.json";
@@ -73,6 +77,8 @@ pub(crate) enum HookEventNameWire {
     PostToolUse,
     #[serde(rename = "SessionStart")]
     SessionStart,
+    #[serde(rename = "BackgroundProcessCompleted")]
+    BackgroundProcessCompleted,
     #[serde(rename = "UserPromptSubmit")]
     UserPromptSubmit,
     #[serde(rename = "Stop")]
@@ -232,6 +238,30 @@ pub(crate) struct SessionStartHookSpecificOutputWire {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
+#[schemars(rename = "background-process-completed.command.output")]
+pub(crate) struct BackgroundProcessCompletedCommandOutputWire {
+    #[serde(flatten)]
+    pub universal: HookUniversalOutputWire,
+    #[serde(default)]
+    pub decision: Option<BlockDecisionWire>,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub hook_specific_output: Option<BackgroundProcessCompletedHookSpecificOutputWire>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub(crate) struct BackgroundProcessCompletedHookSpecificOutputWire {
+    pub hook_event_name: HookEventNameWire,
+    #[serde(default)]
+    pub additional_context: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 #[schemars(rename = "user-prompt-submit.command.output")]
 pub(crate) struct UserPromptSubmitCommandOutputWire {
     #[serde(flatten)]
@@ -313,6 +343,32 @@ impl SessionStartCommandInput {
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(rename = "background-process-completed.command.input")]
+pub(crate) struct BackgroundProcessCompletedCommandInput {
+    pub session_id: String,
+    pub originating_turn_id: String,
+    pub transcript_path: NullableString,
+    pub cwd: String,
+    #[schemars(schema_with = "background_process_completed_hook_event_name_schema")]
+    pub hook_event_name: String,
+    pub model: String,
+    #[schemars(schema_with = "permission_mode_schema")]
+    pub permission_mode: String,
+    pub call_id: String,
+    pub process_id: String,
+    pub command: String,
+    pub exit_code: i32,
+    pub duration_ms: i64,
+    #[schemars(schema_with = "background_process_completed_status_schema")]
+    pub status: String,
+    #[schemars(schema_with = "completion_behavior_schema")]
+    pub completion_behavior: String,
+    pub is_subagent: bool,
+    pub aggregated_output_tail: String,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 #[schemars(rename = "user-prompt-submit.command.input")]
 pub(crate) struct UserPromptSubmitCommandInput {
     pub session_id: String,
@@ -350,6 +406,14 @@ pub fn write_schema_fixtures(schema_root: &Path) -> anyhow::Result<()> {
     let generated_dir = schema_root.join(GENERATED_DIR);
     ensure_empty_dir(&generated_dir)?;
 
+    write_schema(
+        &generated_dir.join(BACKGROUND_PROCESS_COMPLETED_INPUT_FIXTURE),
+        schema_json::<BackgroundProcessCompletedCommandInput>()?,
+    )?;
+    write_schema(
+        &generated_dir.join(BACKGROUND_PROCESS_COMPLETED_OUTPUT_FIXTURE),
+        schema_json::<BackgroundProcessCompletedCommandOutputWire>()?,
+    )?;
     write_schema(
         &generated_dir.join(POST_TOOL_USE_INPUT_FIXTURE),
         schema_json::<PostToolUseCommandInput>()?,
@@ -449,6 +513,10 @@ fn session_start_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_const_schema("SessionStart")
 }
 
+fn background_process_completed_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_const_schema("BackgroundProcessCompleted")
+}
+
 fn post_tool_use_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_const_schema("PostToolUse")
 }
@@ -481,6 +549,14 @@ fn permission_mode_schema(_gen: &mut SchemaGenerator) -> Schema {
         "dontAsk",
         "bypassPermissions",
     ])
+}
+
+fn background_process_completed_status_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_enum_schema(&["completed", "failed"])
+}
+
+fn completion_behavior_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_enum_schema(&["auto", "wake", "ignore"])
 }
 
 fn session_start_source_schema(_gen: &mut SchemaGenerator) -> Schema {
@@ -516,6 +592,10 @@ fn default_continue() -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::BACKGROUND_PROCESS_COMPLETED_INPUT_FIXTURE;
+    use super::BACKGROUND_PROCESS_COMPLETED_OUTPUT_FIXTURE;
+    use super::BackgroundProcessCompletedCommandInput;
+    use super::NullableString;
     use super::POST_TOOL_USE_INPUT_FIXTURE;
     use super::POST_TOOL_USE_OUTPUT_FIXTURE;
     use super::PRE_TOOL_USE_INPUT_FIXTURE;
@@ -538,6 +618,12 @@ mod tests {
 
     fn expected_fixture(name: &str) -> &'static str {
         match name {
+            BACKGROUND_PROCESS_COMPLETED_INPUT_FIXTURE => include_str!(
+                "../schema/generated/background-process-completed.command.input.schema.json"
+            ),
+            BACKGROUND_PROCESS_COMPLETED_OUTPUT_FIXTURE => include_str!(
+                "../schema/generated/background-process-completed.command.output.schema.json"
+            ),
             POST_TOOL_USE_INPUT_FIXTURE => {
                 include_str!("../schema/generated/post-tool-use.command.input.schema.json")
             }
@@ -583,6 +669,8 @@ mod tests {
         write_schema_fixtures(&schema_root).expect("write generated hook schemas");
 
         for fixture in [
+            BACKGROUND_PROCESS_COMPLETED_INPUT_FIXTURE,
+            BACKGROUND_PROCESS_COMPLETED_OUTPUT_FIXTURE,
             POST_TOOL_USE_INPUT_FIXTURE,
             POST_TOOL_USE_OUTPUT_FIXTURE,
             PRE_TOOL_USE_INPUT_FIXTURE,
@@ -634,5 +722,51 @@ mod tests {
                     .contains(&Value::String("turn_id".to_string()))
             );
         }
+    }
+
+    #[test]
+    fn background_process_completed_command_input_serializes_expected_fields() {
+        let input = BackgroundProcessCompletedCommandInput {
+            session_id: "thread-1".to_string(),
+            originating_turn_id: "turn-1".to_string(),
+            transcript_path: NullableString::from_path(Some("/tmp/rollout.jsonl".into())),
+            cwd: "/repo".to_string(),
+            hook_event_name: "BackgroundProcessCompleted".to_string(),
+            model: "gpt-5".to_string(),
+            permission_mode: "bypassPermissions".to_string(),
+            call_id: "call-1".to_string(),
+            process_id: "1000".to_string(),
+            command: "cargo test -p codex-core".to_string(),
+            exit_code: 0,
+            duration_ms: 1250,
+            status: "completed".to_string(),
+            completion_behavior: "wake".to_string(),
+            is_subagent: false,
+            aggregated_output_tail: "test result: ok".to_string(),
+        };
+
+        let json = serde_json::to_value(input).expect("serialize hook input");
+        assert_eq!(json["hook_event_name"], "BackgroundProcessCompleted");
+        assert_eq!(json["permission_mode"], "bypassPermissions");
+        assert_eq!(json["command"], "cargo test -p codex-core");
+        assert_eq!(json["completion_behavior"], "wake");
+    }
+
+    #[test]
+    fn background_process_completed_command_input_schema_constrains_fixed_strings() {
+        let schema: Value = serde_json::from_slice(
+            &schema_json::<BackgroundProcessCompletedCommandInput>()
+                .expect("serialize background process completed input schema"),
+        )
+        .expect("parse background process completed input schema");
+
+        assert_eq!(
+            schema["properties"]["status"]["enum"],
+            serde_json::json!(["completed", "failed"])
+        );
+        assert_eq!(
+            schema["properties"]["completion_behavior"]["enum"],
+            serde_json::json!(["auto", "wake", "ignore"])
+        );
     }
 }

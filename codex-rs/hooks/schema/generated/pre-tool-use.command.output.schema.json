@@ -7,6 +7,7 @@
         "PreToolUse",
         "PostToolUse",
         "SessionStart",
+        "BackgroundProcessCompleted",
         "UserPromptSubmit",
         "Stop"
       ],

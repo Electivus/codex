@@ -24,6 +24,8 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_sandbox;
+use core_test_support::skip_if_windows;
 use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
 use core_test_support::test_codex::TestCodex;
@@ -39,6 +41,7 @@ use tokio::time::sleep;
 const FIRST_CONTINUATION_PROMPT: &str = "Retry with exactly the phrase meow meow meow.";
 const SECOND_CONTINUATION_PROMPT: &str = "Now tighten it to just: meow.";
 const BLOCKED_PROMPT_CONTEXT: &str = "Remember the blocked lighthouse note.";
+const BACKGROUND_COMPLETION_CONTEXT: &str = "background hook context";
 const SPAWN_AGENT_CALL_ID: &str = "spawn-call-1";
 const SPAWN_CHILD_PROMPT: &str = "spawn a child and continue";
 const CHILD_PROMPT: &str = "child: inspect hook";
@@ -316,6 +319,58 @@ elif mode == "exit_2":
     Ok(())
 }
 
+fn write_background_process_completed_hook(
+    home: &Path,
+    matcher: Option<&str>,
+    additional_context: &str,
+) -> Result<()> {
+    let script_path = home.join("background_process_completed_hook.py");
+    let log_path = home.join("background_process_completed_hook_log.jsonl");
+    let additional_context_json = serde_json::to_string(additional_context)
+        .context("serialize background process completed additional context")?;
+    let script = format!(
+        r#"import json
+from pathlib import Path
+import sys
+
+payload = json.load(sys.stdin)
+
+with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload) + "\n")
+
+print(json.dumps({{
+    "hookSpecificOutput": {{
+        "hookEventName": "BackgroundProcessCompleted",
+        "additionalContext": {additional_context_json}
+    }}
+}}))
+"#,
+        log_path = log_path.display(),
+        additional_context_json = additional_context_json,
+    );
+
+    let mut group = serde_json::json!({
+        "hooks": [{
+            "type": "command",
+            "command": format!("python3 {}", script_path.display()),
+            "statusMessage": "running background process completed hook",
+        }]
+    });
+    if let Some(matcher) = matcher {
+        group["matcher"] = Value::String(matcher.to_string());
+    }
+
+    let hooks = serde_json::json!({
+        "hooks": {
+            "BackgroundProcessCompleted": [group]
+        }
+    });
+
+    fs::write(&script_path, script).context("write background process completed hook script")?;
+    fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
+    Ok(())
+}
+
 fn write_session_start_hook_recording_transcript(home: &Path, allow_subagent: bool) -> Result<()> {
     let script_path = home.join("session_start_hook.py");
     let log_path = home.join("session_start_hook_log.jsonl");
@@ -430,6 +485,17 @@ fn read_user_prompt_submit_hook_inputs(home: &Path) -> Result<Vec<serde_json::Va
         .lines()
         .filter(|line| !line.trim().is_empty())
         .map(|line| serde_json::from_str(line).context("parse user prompt submit hook log line"))
+        .collect()
+}
+
+fn read_background_process_completed_hook_inputs(home: &Path) -> Result<Vec<serde_json::Value>> {
+    fs::read_to_string(home.join("background_process_completed_hook_log.jsonl"))
+        .context("read background process completed hook log")?
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            serde_json::from_str(line).context("parse background process completed hook log line")
+        })
         .collect()
 }
 
@@ -1958,6 +2024,106 @@ async fn post_tool_use_does_not_fire_for_non_shell_tools() -> Result<()> {
     assert!(
         !hook_log_path.exists(),
         "non-shell tools should not trigger post tool use hooks",
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn background_process_completed_hook_runs_before_runtime_note() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "bg-hook-completed";
+    let args = serde_json::json!({
+        "cmd": "sleep 0.5; printf HOOKED",
+        "yield_time_ms": 250,
+        "completion_behavior": "wake",
+    });
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "background started"),
+                ev_completed("resp-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-3"),
+                ev_assistant_message("msg-2", "background completion handled"),
+                ev_completed("resp-3"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) = write_background_process_completed_hook(
+                home,
+                Some("^sleep 0.5; printf HOOKED$"),
+                BACKGROUND_COMPLETION_CONTEXT,
+            ) {
+                panic!("failed to write background process completed hook test fixture: {error}");
+            }
+        })
+        .with_config(|config| {
+            config.use_experimental_unified_exec_tool = true;
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build_remote_aware(&server).await?;
+
+    test.submit_turn("start hook-backed background command")
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 3);
+
+    let developer_texts = requests[2].message_input_texts("developer");
+    let context_index = developer_texts
+        .iter()
+        .position(|text| text == BACKGROUND_COMPLETION_CONTEXT)
+        .expect("expected hook additional context in follow-up request");
+    let runtime_note_index = developer_texts
+        .iter()
+        .position(|text| {
+            text.contains("Background process completed after the previous turn ended")
+        })
+        .expect("expected runtime note in follow-up request");
+    assert!(
+        context_index < runtime_note_index,
+        "hook context should precede the runtime note"
+    );
+
+    let hook_inputs = read_background_process_completed_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(
+        hook_inputs[0].get("command").and_then(Value::as_str),
+        Some("sleep 0.5; printf HOOKED")
+    );
+    assert_eq!(
+        hook_inputs[0]
+            .get("completion_behavior")
+            .and_then(Value::as_str),
+        Some("wake")
     );
 
     Ok(())

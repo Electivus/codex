@@ -13,6 +13,15 @@ pub(crate) struct SessionStartOutput {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct BackgroundProcessCompletedOutput {
+    pub universal: UniversalOutput,
+    pub should_block: bool,
+    pub reason: Option<String>,
+    pub invalid_block_reason: Option<String>,
+    pub additional_context: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct PreToolUseOutput {
     pub universal: UniversalOutput,
     pub block_reason: Option<String>,
@@ -46,6 +55,7 @@ pub(crate) struct StopOutput {
     pub invalid_block_reason: Option<String>,
 }
 
+use crate::schema::BackgroundProcessCompletedCommandOutputWire;
 use crate::schema::BlockDecisionWire;
 use crate::schema::HookUniversalOutputWire;
 use crate::schema::PostToolUseCommandOutputWire;
@@ -63,6 +73,32 @@ pub(crate) fn parse_session_start(stdout: &str) -> Option<SessionStartOutput> {
         .and_then(|output| output.additional_context);
     Some(SessionStartOutput {
         universal: UniversalOutput::from(wire.universal),
+        additional_context,
+    })
+}
+
+pub(crate) fn parse_background_process_completed(
+    stdout: &str,
+) -> Option<BackgroundProcessCompletedOutput> {
+    let wire: BackgroundProcessCompletedCommandOutputWire = parse_json(stdout)?;
+    let should_block = matches!(wire.decision, Some(BlockDecisionWire::Block));
+    let invalid_block_reason = if should_block
+        && match wire.reason.as_deref() {
+            Some(reason) => reason.trim().is_empty(),
+            None => true,
+        } {
+        Some(invalid_block_message("BackgroundProcessCompleted"))
+    } else {
+        None
+    };
+    let additional_context = wire
+        .hook_specific_output
+        .and_then(|output| output.additional_context);
+    Some(BackgroundProcessCompletedOutput {
+        universal: UniversalOutput::from(wire.universal),
+        should_block: should_block && invalid_block_reason.is_none(),
+        reason: wire.reason,
+        invalid_block_reason,
         additional_context,
     })
 }
