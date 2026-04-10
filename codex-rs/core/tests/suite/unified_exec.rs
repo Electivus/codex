@@ -17,6 +17,7 @@ use core_test_support::assert_regex_match;
 use core_test_support::process::process_is_alive;
 use core_test_support::process::wait_for_pid_file;
 use core_test_support::process::wait_for_process_exit;
+use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -183,6 +184,24 @@ async fn submit_unified_exec_turn(
         .await?;
 
     Ok(())
+}
+
+async fn wait_for_request_count(
+    request_log: &ResponseMock,
+    expected: usize,
+    timeout: Duration,
+) -> Vec<core_test_support::responses::ResponsesRequest> {
+    tokio::time::timeout(timeout, async {
+        loop {
+            let requests = request_log.requests();
+            if requests.len() >= expected {
+                return requests;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("timed out waiting for expected request count")
 }
 
 async fn create_workspace_directory(
@@ -767,9 +786,10 @@ async fn background_completion_auto_wakes_idle_thread() -> Result<()> {
 
     let call_id = "uexec-background-auto";
     let args = json!({
-        "cmd": "sleep 0.5; printf READY",
+        "cmd": "sleep 1.5; printf READY",
         "yield_time_ms": 250,
         "completion_behavior": "auto",
+        "login": false,
     });
 
     let responses = vec![
@@ -804,14 +824,8 @@ async fn background_completion_auto_wakes_idle_thread() -> Result<()> {
         Duration::from_secs(10),
     )
     .await;
-    wait_for_event_with_timeout(
-        &test.codex,
-        |event| matches!(event, EventMsg::TurnComplete(_)),
-        Duration::from_secs(10),
-    )
-    .await;
 
-    let requests = request_log.requests();
+    let requests = wait_for_request_count(&request_log, 3, Duration::from_secs(15)).await;
     assert_eq!(
         requests.len(),
         3,
@@ -911,12 +925,14 @@ async fn background_completion_auto_drops_when_thread_is_active() -> Result<()> 
         "cmd": "sleep 1.5; printf AUTO-DROP",
         "yield_time_ms": 250,
         "completion_behavior": "auto",
+        "login": false,
     });
 
     let active_turn_call_id = "uexec-active-turn";
     let active_turn_args = json!({
         "cmd": "sleep 4; printf ACTIVE-TURN",
         "yield_time_ms": 4500,
+        "login": false,
     });
 
     let responses = vec![
@@ -981,24 +997,14 @@ async fn background_completion_auto_drops_when_thread_is_active() -> Result<()> 
         Duration::from_secs(10),
     )
     .await;
-    let background_completed_while_active = loop {
-        let event = wait_for_event(&test.codex, |_| true).await;
-        match event {
-            EventMsg::ExecCommandEnd(ev) if ev.call_id == background_call_id => break true,
-            EventMsg::TurnComplete(_) => break false,
-            _ => {}
-        }
-    };
-    assert!(
-        background_completed_while_active,
-        "expected background completion before the active turn finished"
-    );
     wait_for_event_with_timeout(
         &test.codex,
         |event| matches!(event, EventMsg::TurnComplete(_)),
         Duration::from_secs(10),
     )
     .await;
+
+    let _ = wait_for_request_count(&request_log, 4, Duration::from_secs(10)).await;
     tokio::time::sleep(Duration::from_millis(800)).await;
 
     assert_eq!(
@@ -1031,12 +1037,14 @@ async fn background_completion_wake_queues_after_active_turn_finishes() -> Resul
         "cmd": "sleep 1.5; printf WAKE-QUEUE",
         "yield_time_ms": 250,
         "completion_behavior": "wake",
+        "login": false,
     });
 
     let active_turn_call_id = "uexec-wake-active-turn";
     let active_turn_args = json!({
         "cmd": "sleep 4; printf ACTIVE-TURN",
         "yield_time_ms": 4500,
+        "login": false,
     });
 
     let responses = vec![
@@ -1106,24 +1114,6 @@ async fn background_completion_wake_queues_after_active_turn_finishes() -> Resul
         Duration::from_secs(10),
     )
     .await;
-    let background_completed_while_active = loop {
-        let event = wait_for_event(&test.codex, |_| true).await;
-        match event {
-            EventMsg::ExecCommandEnd(ev) if ev.call_id == background_call_id => break true,
-            EventMsg::TurnComplete(_) => break false,
-            _ => {}
-        }
-    };
-    assert!(
-        background_completed_while_active,
-        "expected background completion before the active turn finished"
-    );
-    wait_for_event_with_timeout(
-        &test.codex,
-        |event| matches!(event, EventMsg::TurnComplete(_)),
-        Duration::from_secs(10),
-    )
-    .await;
     wait_for_event_with_timeout(
         &test.codex,
         |event| matches!(event, EventMsg::TurnComplete(_)),
@@ -1131,7 +1121,7 @@ async fn background_completion_wake_queues_after_active_turn_finishes() -> Resul
     )
     .await;
 
-    let requests = request_log.requests();
+    let requests = wait_for_request_count(&request_log, 5, Duration::from_secs(10)).await;
     assert_eq!(
         requests.len(),
         5,

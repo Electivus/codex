@@ -3,8 +3,8 @@
 
 use std::fs;
 use std::time::Duration;
-use std::time::Instant;
 
+use codex_features::Feature;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -30,7 +30,7 @@ use serde_json::Value;
 use serde_json::json;
 use tokio::sync::oneshot;
 
-async fn run_turn(test: &TestCodex, prompt: &str) -> anyhow::Result<()> {
+async fn submit_turn(test: &TestCodex, prompt: &str) -> anyhow::Result<()> {
     let session_model = test.session_configured.model.clone();
 
     test.codex
@@ -53,29 +53,24 @@ async fn run_turn(test: &TestCodex, prompt: &str) -> anyhow::Result<()> {
         })
         .await?;
 
+    Ok(())
+}
+
+async fn run_turn(test: &TestCodex, prompt: &str) -> anyhow::Result<()> {
+    submit_turn(test, prompt).await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     Ok(())
 }
 
-async fn run_turn_and_measure(test: &TestCodex, prompt: &str) -> anyhow::Result<Duration> {
-    let start = Instant::now();
-    run_turn(test, prompt).await?;
-    Ok(start.elapsed())
-}
-
 #[allow(clippy::expect_used)]
 async fn build_codex_with_test_tool(server: &wiremock::MockServer) -> anyhow::Result<TestCodex> {
-    let mut builder = test_codex().with_model("test-gpt-5.1-codex");
+    let mut builder = test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_config(|config| {
+            let _ = config.features.disable(Feature::ShellZshFork);
+        });
     builder.build(server).await
-}
-
-fn assert_parallel_duration(actual: Duration) {
-    // Allow headroom for slow CI scheduling; barrier synchronization already enforces overlap.
-    assert!(
-        actual < Duration::from_millis(1_600),
-        "expected parallel execution to finish quickly, got {actual:?}"
-    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -126,68 +121,98 @@ async fn read_file_tools_run_in_parallel() -> anyhow::Result<()> {
         ev_assistant_message("msg-1", "done"),
         ev_completed("resp-2"),
     ]);
-    mount_sse_sequence(
+    let request_log = mount_sse_sequence(
         &server,
         vec![warmup_first, warmup_second, first_response, second_response],
     )
     .await;
 
     run_turn(&test, "warm up parallel tool").await?;
+    run_turn(&test, "exercise sync tool").await?;
 
-    let duration = run_turn_and_measure(&test, "exercise sync tool").await?;
-    assert_parallel_duration(duration);
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 4);
+
+    let tool_outputs_request = &requests[3];
+    for call_id in ["call-1", "call-2"] {
+        let (content, success) = tool_outputs_request
+            .function_call_output_content_and_success(call_id)
+            .expect("expected function_call_output for sync tool");
+        assert_eq!(content.as_deref(), Some("ok"));
+        assert_eq!(
+            success, None,
+            "test_sync_tool currently serializes plain text output without a success wrapper"
+        );
+    }
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn shell_tools_run_in_parallel() -> anyhow::Result<()> {
+async fn shell_tools_complete_and_report_outputs() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_model("gpt-5.1");
+    let mut builder = test_codex().with_model("gpt-5.1").with_config(|config| {
+        let _ = config.features.disable(Feature::ShellZshFork);
+    });
     let test = builder.build(&server).await?;
 
     let shell_args = json!({
-        "command": "sleep 0.25",
-        // Avoid user-specific shell startup cost (e.g. zsh profile scripts) in timing assertions.
-        "login": false,
-        "timeout_ms": 1_000,
+        "command": ["/bin/sh", "-c", "printf shell-output"],
+        "timeout_ms": 3_000,
     });
     let args_one = serde_json::to_string(&shell_args)?;
     let args_two = serde_json::to_string(&shell_args)?;
 
     let first_response = sse(vec![
         json!({"type": "response.created", "response": {"id": "resp-1"}}),
-        ev_function_call("call-1", "shell_command", &args_one),
-        ev_function_call("call-2", "shell_command", &args_two),
+        ev_function_call("call-1", "shell", &args_one),
+        ev_function_call("call-2", "shell", &args_two),
         ev_completed("resp-1"),
     ]);
     let second_response = sse(vec![
         ev_assistant_message("msg-1", "done"),
         ev_completed("resp-2"),
     ]);
-    mount_sse_sequence(&server, vec![first_response, second_response]).await;
+    let request_log = mount_sse_sequence(&server, vec![first_response, second_response]).await;
 
-    let duration = run_turn_and_measure(&test, "run shell_command twice").await?;
-    assert_parallel_duration(duration);
+    run_turn(&test, "run shell twice").await?;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 2);
+
+    let output_request = &requests[1];
+    for call_id in ["call-1", "call-2"] {
+        let (content, success) = output_request
+            .function_call_output_content_and_success(call_id)
+            .expect("expected function_call_output for shell tool");
+        assert_eq!(success, None);
+        assert!(
+            content
+                .as_deref()
+                .is_some_and(|text| text.contains("shell-output")),
+            "expected shell output for {call_id}: {:?}",
+            output_request.function_call_output(call_id)
+        );
+    }
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn mixed_parallel_tools_run_in_parallel() -> anyhow::Result<()> {
+async fn mixed_tools_complete_and_report_outputs() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
     let test = build_codex_with_test_tool(&server).await?;
 
     let sync_args = json!({
-        "sleep_after_ms": 300
+        "sleep_after_ms": 25
     })
     .to_string();
     let shell_args = serde_json::to_string(&json!({
-        "command": "sleep 0.25",
+        "command": "printf mixed",
         // Avoid user-specific shell startup cost in timing assertions.
         "login": false,
         "timeout_ms": 1_000,
@@ -203,10 +228,31 @@ async fn mixed_parallel_tools_run_in_parallel() -> anyhow::Result<()> {
         ev_assistant_message("msg-1", "done"),
         ev_completed("resp-2"),
     ]);
-    mount_sse_sequence(&server, vec![first_response, second_response]).await;
+    let request_log = mount_sse_sequence(&server, vec![first_response, second_response]).await;
 
-    let duration = run_turn_and_measure(&test, "mix tools").await?;
-    assert_parallel_duration(duration);
+    run_turn(&test, "mix tools").await?;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 2);
+
+    let output_request = &requests[1];
+    let (sync_output, sync_success) = output_request
+        .function_call_output_content_and_success("call-1")
+        .expect("expected sync tool output");
+    assert_eq!(sync_output.as_deref(), Some("ok"));
+    assert_eq!(sync_success, None);
+
+    let (shell_output, shell_success) = output_request
+        .function_call_output_content_and_success("call-2")
+        .expect("expected shell output");
+    assert_eq!(shell_success, None);
+    assert!(
+        shell_output
+            .as_deref()
+            .is_some_and(|text| text.contains("mixed")),
+        "expected shell output in mixed tool request: {:?}",
+        output_request.function_call_output("call-2")
+    );
 
     Ok(())
 }

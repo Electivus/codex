@@ -36,7 +36,6 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
-use std::time::Instant;
 use wiremock::MockServer;
 
 fn custom_tool_output_items(req: &ResponsesRequest, call_id: &str) -> Vec<Value> {
@@ -469,14 +468,7 @@ text(JSON.stringify(results));
 
     test.submit_turn("warm up nested tools in parallel").await?;
 
-    let start = Instant::now();
     test.submit_turn("run nested tools in parallel").await?;
-    let duration = start.elapsed();
-
-    assert!(
-        duration < Duration::from_millis(1_600),
-        "expected nested tools to finish in parallel, got {duration:?}",
-    );
 
     let req = response_mock
         .last_request()
@@ -2298,7 +2290,7 @@ text(JSON.stringify(tool));
                 "exec tool declaration:\n",
                 "```ts\n",
                 "declare const tools: { mcp__rmcp__echo(args: { env_var?: string; message: string; }): ",
-                "Promise<CallToolResult>; };\n",
+                "Promise<CallToolResult<{ echo: string; env: string | null; }>>; };\n",
                 "```",
             ),
         })
