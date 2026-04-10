@@ -1,9 +1,8 @@
 ---
-source: tui/src/chatwidget/tests.rs
+source: tui/src/chatwidget/tests/helpers.rs
+assertion_line: 1065
 expression: combined
 ---
-• Running BackgroundProcessCompleted hook: processing late command completion
-
-BackgroundProcessCompleted hook (completed)
+• BackgroundProcessCompleted hook (completed)
   warning: Heads up from the hook
   hook context: Remember the startup checklist.

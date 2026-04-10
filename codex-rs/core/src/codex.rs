@@ -51,6 +51,8 @@ use chrono::Local;
 use chrono::Utc;
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::AppInvocation;
+use codex_analytics::CompactionPhase;
+use codex_analytics::CompactionReason;
 use codex_analytics::InvocationType;
 use codex_analytics::SubAgentThreadStartedInput;
 use codex_analytics::build_track_events_context;
@@ -436,6 +438,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) inherited_exec_policy: Option<Arc<ExecPolicyManager>>,
     pub(crate) user_shell_override: Option<shell::Shell>,
     pub(crate) parent_trace: Option<W3cTraceContext>,
+    pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
 }
 
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";
@@ -488,6 +491,7 @@ impl Codex {
             user_shell_override,
             inherited_exec_policy,
             parent_trace: _,
+            analytics_events_client,
         } = args;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -678,6 +682,7 @@ impl Codex {
             skills_watcher,
             agent_control,
             environment,
+            analytics_events_client,
         )
         .await
         .map_err(|e| {
@@ -1606,6 +1611,7 @@ impl Session {
         skills_watcher: Arc<SkillsWatcher>,
         agent_control: AgentControl,
         environment: Option<Arc<Environment>>,
+        analytics_events_client: Option<AnalyticsEventsClient>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -1986,6 +1992,13 @@ impl Session {
         }
 
         let installation_id = resolve_installation_id(&config.codex_home).await?;
+        let analytics_events_client = analytics_events_client.unwrap_or_else(|| {
+            AnalyticsEventsClient::new(
+                Arc::clone(&auth_manager),
+                config.chatgpt_base_url.trim_end_matches('/').to_string(),
+                config.analytics_enabled,
+            )
+        });
         let services = SessionServices {
             // Initialize the MCP connection manager with an uninitialized
             // instance. It will be replaced with one created via
@@ -2004,11 +2017,7 @@ impl Session {
             ),
             shell_zsh_path: config.zsh_path.clone(),
             main_execve_wrapper_exe: config.main_execve_wrapper_exe.clone(),
-            analytics_events_client: AnalyticsEventsClient::new(
-                Arc::clone(&auth_manager),
-                config.chatgpt_base_url.trim_end_matches('/').to_string(),
-                config.analytics_enabled,
-            ),
+            analytics_events_client,
             hooks,
             rollout: Mutex::new(rollout_recorder),
             user_shell: Arc::new(default_shell),
@@ -6420,6 +6429,8 @@ pub(crate) async fn run_turn(
                         &sess,
                         &turn_context,
                         InitialContextInjection::BeforeLastUserMessage,
+                        CompactionReason::ContextLimit,
+                        CompactionPhase::MidTurn,
                     )
                     .await
                     .is_err()
@@ -6621,7 +6632,14 @@ async fn run_pre_sampling_compact(
         .unwrap_or(i64::MAX);
     // Compact if the total usage tokens are greater than the auto compact limit
     if total_usage_tokens >= auto_compact_limit {
-        run_auto_compact(sess, turn_context, InitialContextInjection::DoNotInject).await?;
+        run_auto_compact(
+            sess,
+            turn_context,
+            InitialContextInjection::DoNotInject,
+            CompactionReason::ContextLimit,
+            CompactionPhase::PreTurn,
+        )
+        .await?;
         pre_sampling_compacted = true;
     }
     Ok(pre_sampling_compacted)
@@ -6665,6 +6683,8 @@ async fn maybe_run_previous_model_inline_compact(
             sess,
             &previous_model_turn_context,
             InitialContextInjection::DoNotInject,
+            CompactionReason::ModelDownshift,
+            CompactionPhase::PreTurn,
         )
         .await?;
         return Ok(true);
@@ -6676,12 +6696,16 @@ async fn run_auto_compact(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     initial_context_injection: InitialContextInjection,
+    reason: CompactionReason,
+    phase: CompactionPhase,
 ) -> CodexResult<()> {
     if should_use_remote_compact_task(&turn_context.provider) {
         run_inline_remote_auto_compact_task(
             Arc::clone(sess),
             Arc::clone(turn_context),
             initial_context_injection,
+            reason,
+            phase,
         )
         .await?;
     } else {
@@ -6689,6 +6713,8 @@ async fn run_auto_compact(
             Arc::clone(sess),
             Arc::clone(turn_context),
             initial_context_injection,
+            reason,
+            phase,
         )
         .await?;
     }
