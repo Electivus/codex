@@ -226,7 +226,7 @@ pub(crate) async fn record_background_process_completion(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     completion: BackgroundProcessCompletionRecord,
-) {
+) -> bool {
     let request = BackgroundProcessCompletedRequest {
         session_id: sess.conversation_id,
         originating_turn_id: completion.originating_turn_id.clone(),
@@ -254,12 +254,13 @@ pub(crate) async fn record_background_process_completion(
     )
     .await;
     if outcome.record_additional_contexts(sess, turn_context).await {
-        return;
+        return true;
     }
 
     let runtime_note = completion.runtime_note_message();
     sess.record_conversation_items(turn_context, std::slice::from_ref(&runtime_note))
         .await;
+    false
 }
 
 pub(crate) async fn inspect_pending_input(

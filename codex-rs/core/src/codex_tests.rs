@@ -5163,6 +5163,96 @@ print(json.dumps({
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn background_completion_drain_stops_turn_when_hook_blocks() -> anyhow::Result<()> {
+    let (mut session, turn_context) = make_session_and_context().await;
+    let codex_home = turn_context.config.codex_home.clone();
+    let turn_context = Arc::new(turn_context);
+    fs::create_dir_all(&codex_home)?;
+    let background_hook_script_path = codex_home.join("background_process_completed_hook.py");
+
+    fs::write(
+        &background_hook_script_path,
+        r#"import json
+
+print(json.dumps({
+    "continue": False,
+    "stopReason": "pause turn",
+    "hookSpecificOutput": {
+        "hookEventName": "BackgroundProcessCompleted",
+        "additionalContext": "do not continue"
+    }
+}))
+"#,
+    )?;
+    fs::write(
+        codex_home.join("hooks.json"),
+        serde_json::json!({
+            "hooks": {
+                "BackgroundProcessCompleted": [{
+                    "hooks": [{
+                        "type": "command",
+                        "command": format!("python3 {}", background_hook_script_path.display()),
+                        "statusMessage": "running background process completed hook",
+                    }]
+                }]
+            }
+        })
+        .to_string(),
+    )?;
+
+    session.services.hooks = Hooks::new(HooksConfig {
+        feature_enabled: true,
+        config_layer_stack: Some(turn_context.config.config_layer_stack.clone()),
+        legacy_notify_argv: turn_context.config.notify.clone(),
+        ..HooksConfig::default()
+    });
+    let session = Arc::new(session);
+
+    {
+        let mut active = session.active_turn.lock().await;
+        let turn = active.get_or_insert_with(ActiveTurn::default);
+        let mut turn_state = turn.turn_state.lock().await;
+        turn_state.push_pending_background_process_completion(BackgroundProcessCompletionRecord {
+            call_id: "call-stop-turn".to_string(),
+            process_id: 987,
+            originating_turn_id: "origin-turn".to_string(),
+            cwd: turn_context.cwd.to_path_buf(),
+            command: "cargo test".to_string(),
+            exit_code: 1,
+            duration_ms: 900,
+            status: BackgroundProcessCompletionStatus::Failed,
+            completion_behavior: CompletionBehavior::Wake,
+            is_subagent: false,
+            aggregated_output_tail: "failed".to_string(),
+        });
+    }
+
+    assert!(drain_pending_background_process_completions(&session, &turn_context).await);
+
+    let history = session.clone_history().await;
+    assert!(
+        history
+            .raw_items()
+            .iter()
+            .any(|item| item == &DeveloperInstructions::new("do not continue").into())
+    );
+    assert!(!history.raw_items().iter().any(|item| match item {
+        ResponseItem::Message { content, .. } => content.iter().any(|content_item| {
+            matches!(
+                content_item,
+                ContentItem::InputText { text }
+                    if text.contains(
+                        "Background process completed after the previous turn ended"
+                    )
+            )
+        }),
+        _ => false,
+    }));
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn steer_input_returns_active_turn_id() {
     let (sess, tc, _rx) = make_session_and_context_with_rx().await;

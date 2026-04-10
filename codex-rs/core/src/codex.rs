@@ -6062,8 +6062,9 @@ pub(crate) async fn run_turn(
         .collect::<Vec<_>>();
 
     let startup_hook_should_stop = run_pending_session_start_hooks(&sess, &turn_context).await;
-    drain_pending_background_process_completions(&sess, &turn_context).await;
-    if startup_hook_should_stop {
+    let background_completion_hook_should_stop =
+        drain_pending_background_process_completions(&sess, &turn_context).await;
+    if startup_hook_should_stop || background_completion_hook_should_stop {
         return None;
     }
     let additional_contexts = if input.is_empty() {
@@ -6139,8 +6140,9 @@ pub(crate) async fn run_turn(
     loop {
         let session_start_hook_should_stop =
             run_pending_session_start_hooks(&sess, &turn_context).await;
-        drain_pending_background_process_completions(&sess, &turn_context).await;
-        if session_start_hook_should_stop {
+        let background_completion_hook_should_stop =
+            drain_pending_background_process_completions(&sess, &turn_context).await;
+        if session_start_hook_should_stop || background_completion_hook_should_stop {
             break;
         }
 
@@ -6417,12 +6419,15 @@ pub(crate) async fn run_turn(
 async fn drain_pending_background_process_completions(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-) {
+) -> bool {
     let pending_background_process_completions =
         sess.take_pending_background_process_completions().await;
     for completion in pending_background_process_completions {
-        record_background_process_completion(sess, turn_context, completion).await;
+        if record_background_process_completion(sess, turn_context, completion).await {
+            return true;
+        }
     }
+    false
 }
 
 async fn run_pre_sampling_compact(
