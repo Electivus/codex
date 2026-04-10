@@ -203,7 +203,7 @@ pub(crate) fn spawn_exit_watcher(
     });
 }
 
-async fn maybe_queue_background_completion(
+pub(super) async fn maybe_queue_background_completion(
     session_ref: &Arc<Session>,
     late_completion_eligible: &Arc<AtomicBool>,
     record: BackgroundProcessCompletionRecord,
@@ -212,7 +212,7 @@ async fn maybe_queue_background_completion(
         return;
     }
 
-    let has_active_turn = session_ref.has_active_turn_or_running_agent().await;
+    let has_active_turn = session_ref.has_active_turn().await;
 
     match (record.completion_behavior, has_active_turn) {
         (CompletionBehavior::Ignore, _) | (CompletionBehavior::Auto, true) => {}

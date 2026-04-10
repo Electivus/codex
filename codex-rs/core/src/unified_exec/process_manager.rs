@@ -2,6 +2,7 @@ use rand::Rng;
 use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -12,6 +13,10 @@ use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
+use crate::background_process_completion::BackgroundProcessCompletionRecord;
+use crate::background_process_completion::BackgroundProcessCompletionStatus;
+use crate::background_process_completion::CompletionBehavior;
+use crate::background_process_completion::bounded_output_tail;
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::sandboxing::ExecRequest;
@@ -39,6 +44,7 @@ use crate::unified_exec::WARNING_UNIFIED_EXEC_PROCESSES;
 use crate::unified_exec::WriteStdinRequest;
 use crate::unified_exec::async_watcher::emit_exec_end_for_unified_exec;
 use crate::unified_exec::async_watcher::emit_failed_exec_end_for_unified_exec;
+use crate::unified_exec::async_watcher::maybe_queue_background_completion;
 use crate::unified_exec::async_watcher::spawn_exit_watcher;
 use crate::unified_exec::async_watcher::start_streaming_output;
 use crate::unified_exec::clamp_yield_time;
@@ -49,6 +55,7 @@ use crate::unified_exec::process::OutputHandles;
 use crate::unified_exec::process::SpawnLifecycleHandle;
 use crate::unified_exec::process::UnifiedExecProcess;
 use codex_protocol::protocol::ExecCommandSource;
+use codex_protocol::protocol::SessionSource;
 use codex_utils_output_truncation::approx_token_count;
 
 const UNIFIED_EXEC_ENV: [(&str, &str); 10] = [
@@ -76,6 +83,18 @@ pub(super) fn set_deterministic_process_ids_for_tests(enabled: bool) {
 
 fn deterministic_process_ids_forced_for_tests() -> bool {
     FORCE_DETERMINISTIC_PROCESS_IDS.load(Ordering::Relaxed)
+}
+
+struct LateCompletionBackfill<'a> {
+    context: &'a UnifiedExecContext,
+    process: &'a Arc<UnifiedExecProcess>,
+    transcript: &'a Arc<tokio::sync::Mutex<HeadTailBuffer>>,
+    late_completion_eligible: &'a Arc<AtomicBool>,
+    raw_command: &'a str,
+    cwd: &'a Path,
+    process_id: i32,
+    completion_behavior: CompletionBehavior,
+    started_at: Instant,
 }
 
 fn should_use_deterministic_process_ids() -> bool {
@@ -287,6 +306,18 @@ impl UnifiedExecProcessManager {
                 } => {
                     if let Some(late_completion_eligible) = late_completion_eligible.as_ref() {
                         late_completion_eligible.store(true, Ordering::Relaxed);
+                        backfill_late_completion_after_arming(LateCompletionBackfill {
+                            context,
+                            process: &process,
+                            transcript: &transcript,
+                            late_completion_eligible,
+                            raw_command: &request.raw_command,
+                            cwd: cwd.as_path(),
+                            process_id,
+                            completion_behavior: request.completion_behavior,
+                            started_at: start,
+                        })
+                        .await;
                     }
                     (Some(process_id), exit_code)
                 }
@@ -603,7 +634,6 @@ impl UnifiedExecProcessManager {
 
         late_completion_eligible
     }
-
     pub(crate) async fn open_session_with_exec_env(
         &self,
         process_id: i32,
@@ -923,6 +953,57 @@ impl UnifiedExecProcessManager {
             entry.process.terminate();
         }
     }
+}
+
+async fn backfill_late_completion_after_arming(params: LateCompletionBackfill<'_>) {
+    let LateCompletionBackfill {
+        context,
+        process,
+        transcript,
+        late_completion_eligible,
+        raw_command,
+        cwd,
+        process_id,
+        completion_behavior,
+        started_at,
+    } = params;
+
+    if !late_completion_eligible.load(Ordering::Relaxed) || !process.has_exited() {
+        return;
+    }
+
+    let failure_message = process.failure_message();
+    let (status, exit_code) = match failure_message {
+        Some(_) => (BackgroundProcessCompletionStatus::Failed, -1),
+        None => (
+            BackgroundProcessCompletionStatus::Completed,
+            process.exit_code().unwrap_or(-1),
+        ),
+    };
+    let aggregated_output_tail = {
+        let guard = transcript.lock().await;
+        let output = String::from_utf8_lossy(&guard.to_bytes()).to_string();
+        bounded_output_tail(&output)
+    };
+
+    maybe_queue_background_completion(
+        &context.session,
+        late_completion_eligible,
+        BackgroundProcessCompletionRecord {
+            call_id: context.call_id.clone(),
+            process_id,
+            originating_turn_id: context.turn.sub_id.clone(),
+            cwd: cwd.to_path_buf(),
+            command: raw_command.to_string(),
+            exit_code,
+            duration_ms: i64::try_from(started_at.elapsed().as_millis()).unwrap_or(i64::MAX),
+            status,
+            completion_behavior,
+            is_subagent: matches!(context.turn.session_source, SessionSource::SubAgent(_)),
+            aggregated_output_tail,
+        },
+    )
+    .await;
 }
 
 enum ProcessStatus {

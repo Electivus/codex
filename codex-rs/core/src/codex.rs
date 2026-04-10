@@ -4318,12 +4318,8 @@ impl Session {
         }
     }
 
-    pub(crate) async fn has_active_turn_or_running_agent(&self) -> bool {
-        if self.active_turn.lock().await.is_some() {
-            return true;
-        }
-
-        matches!(self.agent_status.borrow().clone(), AgentStatus::Running)
+    pub(crate) async fn has_active_turn(&self) -> bool {
+        self.active_turn.lock().await.is_some()
     }
 
     pub async fn has_pending_input(&self) -> bool {
