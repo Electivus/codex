@@ -723,7 +723,7 @@ mod tests {
             cwd: "/repo".to_string(),
             hook_event_name: "BackgroundProcessCompleted".to_string(),
             model: "gpt-5".to_string(),
-            permission_mode: "never".to_string(),
+            permission_mode: "bypassPermissions".to_string(),
             call_id: "call-1".to_string(),
             process_id: "1000".to_string(),
             command: "cargo test -p codex-core".to_string(),
@@ -737,6 +737,7 @@ mod tests {
 
         let json = serde_json::to_value(input).expect("serialize hook input");
         assert_eq!(json["hook_event_name"], "BackgroundProcessCompleted");
+        assert_eq!(json["permission_mode"], "bypassPermissions");
         assert_eq!(json["command"], "cargo test -p codex-core");
         assert_eq!(json["completion_behavior"], "wake");
     }
