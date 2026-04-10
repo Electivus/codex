@@ -4622,6 +4622,31 @@ impl SessionTask for NeverEndingTask {
     }
 }
 
+#[derive(Clone, Copy)]
+struct ImmediateTask {
+    kind: TaskKind,
+}
+
+impl SessionTask for ImmediateTask {
+    fn kind(&self) -> TaskKind {
+        self.kind
+    }
+
+    fn span_name(&self) -> &'static str {
+        "session_task.immediate"
+    }
+
+    async fn run(
+        self: Arc<Self>,
+        _session: Arc<SessionTaskContext>,
+        _ctx: Arc<TurnContext>,
+        _input: Vec<UserInput>,
+        _cancellation_token: CancellationToken,
+    ) -> Option<String> {
+        None
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_log::test]
 async fn abort_regular_task_emits_turn_aborted_only() {
@@ -4896,6 +4921,7 @@ async fn steer_input_rejects_non_regular_turns() {
 async fn startup_hook_stop_still_records_queued_background_completion() -> anyhow::Result<()> {
     let (mut session, turn_context) = make_session_and_context().await;
     let codex_home = turn_context.config.codex_home.clone();
+    let turn_context = Arc::new(turn_context);
     fs::create_dir_all(&codex_home)?;
     let background_hook_script_path = codex_home.join("background_process_completed_hook.py");
     let background_hook_log_path = codex_home.join("background_process_completed_hook_log.jsonl");
@@ -5000,6 +5026,132 @@ print(json.dumps({
     assert_eq!(
         hook_inputs[0].get("call_id"),
         Some(&Value::String("call-startup-stop".to_string()))
+    );
+    assert!(
+        !session
+            .has_queued_background_process_completions_for_next_turn()
+            .await
+    );
+    assert!(!session.has_pending_background_process_completions().await);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn non_run_turn_task_finish_preserves_queued_background_completion() -> anyhow::Result<()> {
+    let (mut session, turn_context) = make_session_and_context().await;
+    let codex_home = turn_context.config.codex_home.clone();
+    let turn_context = Arc::new(turn_context);
+    fs::create_dir_all(&codex_home)?;
+    let background_hook_script_path = codex_home.join("background_process_completed_hook.py");
+    let background_hook_log_path = codex_home.join("background_process_completed_hook_log.jsonl");
+    let session_start_hook_script_path = codex_home.join("session_start_hook.py");
+
+    fs::write(
+        &background_hook_script_path,
+        format!(
+            r#"import json
+from pathlib import Path
+import sys
+
+payload = json.load(sys.stdin)
+
+with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload) + "\n")
+"#,
+            log_path = background_hook_log_path.display(),
+        ),
+    )?;
+    fs::write(
+        &session_start_hook_script_path,
+        r#"import json
+
+print(json.dumps({
+    "continue": False,
+    "stopReason": "stop before model request"
+}))
+"#,
+    )?;
+    fs::write(
+        codex_home.join("hooks.json"),
+        serde_json::json!({
+            "hooks": {
+                "BackgroundProcessCompleted": [{
+                    "hooks": [{
+                        "type": "command",
+                        "command": format!("python3 {}", background_hook_script_path.display()),
+                        "statusMessage": "running background process completed hook",
+                    }]
+                }],
+                "SessionStart": [{
+                    "hooks": [{
+                        "type": "command",
+                        "command": format!("python3 {}", session_start_hook_script_path.display()),
+                        "statusMessage": "running session start hook",
+                    }]
+                }]
+            }
+        })
+        .to_string(),
+    )?;
+
+    session.services.hooks = Hooks::new(HooksConfig {
+        feature_enabled: true,
+        config_layer_stack: Some(turn_context.config.config_layer_stack.clone()),
+        legacy_notify_argv: turn_context.config.notify.clone(),
+        ..HooksConfig::default()
+    });
+    {
+        let mut state = session.state.lock().await;
+        state.set_pending_session_start_source(Some(codex_hooks::SessionStartSource::Startup));
+    }
+    let session = Arc::new(session);
+
+    assert!(
+        session
+            .queue_background_process_completion_for_next_turn(BackgroundProcessCompletionRecord {
+                call_id: "call-immediate-task".to_string(),
+                process_id: 654,
+                originating_turn_id: "origin-turn".to_string(),
+                cwd: turn_context.cwd.to_path_buf(),
+                command: "cargo test".to_string(),
+                exit_code: 0,
+                duration_ms: 750,
+                status: BackgroundProcessCompletionStatus::Completed,
+                completion_behavior: CompletionBehavior::Wake,
+                is_subagent: false,
+                aggregated_output_tail: "done".to_string(),
+            })
+            .await
+    );
+
+    session
+        .spawn_task(
+            Arc::clone(&turn_context),
+            Vec::new(),
+            ImmediateTask {
+                kind: TaskKind::Regular,
+            },
+        )
+        .await;
+
+    tokio::time::timeout(StdDuration::from_secs(5), async {
+        while session.has_active_turn().await {
+            sleep(StdDuration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("follow-up turn should stop promptly");
+
+    let hook_inputs = fs::read_to_string(&background_hook_log_path)?
+        .lines()
+        .map(serde_json::from_str::<Value>)
+        .collect::<Result<Vec<_>, _>>()?;
+
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(
+        hook_inputs[0].get("call_id"),
+        Some(&Value::String("call-immediate-task".to_string()))
     );
     assert!(
         !session

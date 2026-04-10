@@ -403,6 +403,7 @@ impl Session {
             .cancel_git_enrichment_task();
 
         let mut pending_input = Vec::<ResponseInputItem>::new();
+        let mut pending_background_process_completions = Vec::new();
         let mut should_clear_active_turn = false;
         let mut token_usage_at_turn_start = None;
         let mut turn_tool_calls = 0_u64;
@@ -424,8 +425,15 @@ impl Session {
         if let Some(turn_state) = turn_state {
             let mut ts = turn_state.lock().await;
             pending_input = ts.take_pending_input();
+            pending_background_process_completions =
+                ts.take_pending_background_process_completions();
             turn_tool_calls = ts.tool_calls;
             token_usage_at_turn_start = Some(ts.token_usage_at_turn_start.clone());
+        }
+        for completion in pending_background_process_completions {
+            let _ = self
+                .queue_background_process_completion_for_next_turn(completion)
+                .await;
         }
         if !pending_input.is_empty() {
             for pending_input_item in pending_input {
