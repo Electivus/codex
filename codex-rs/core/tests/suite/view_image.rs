@@ -417,10 +417,12 @@ async fn view_image_tool_can_preserve_original_resolution_when_requested_on_gpt5
         })
         .await?;
 
+    // Even with serialized test execution, this turn still does enough real
+    // image work that smaller fork runners can legitimately exceed 10s.
     wait_for_event_with_timeout(
         codex,
         |event| matches!(event, EventMsg::TurnComplete(_)),
-        Duration::from_secs(10),
+        Duration::from_secs(20),
     )
     .await;
 

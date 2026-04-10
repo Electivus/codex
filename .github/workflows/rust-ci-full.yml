@@ -6,6 +6,9 @@ on:
       - "**full-ci**"
   workflow_dispatch:
 
+env:
+  RUST_TEST_THREADS: 1
+
 # CI builds in debug (dev) for faster signal.
 
 jobs:

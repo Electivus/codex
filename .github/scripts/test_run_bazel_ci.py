@@ -177,7 +177,7 @@ class RunBazelCiTests(unittest.TestCase):
             bazel_args = bazel_args_file.read_text().splitlines()
             self.assertIn("--config=ci-macos", bazel_args)
             self.assertIn("--remote_header=x-buildbuddy-api-key=test-key", bazel_args)
-            self.assertIn("--jobs=10", bazel_args)
+            self.assertIn("--jobs=1", bazel_args)
 
     def test_remote_linux_fork_tests_reduce_jobs_and_local_test_jobs(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -221,8 +221,8 @@ class RunBazelCiTests(unittest.TestCase):
             )
 
             bazel_args = bazel_args_file.read_text().splitlines()
-            self.assertIn("--jobs=10", bazel_args)
-            self.assertIn("--local_test_jobs=2", bazel_args)
+            self.assertIn("--jobs=1", bazel_args)
+            self.assertIn("--local_test_jobs=1", bazel_args)
 
     def test_remote_macos_fork_builds_respect_short_jobs_override(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -268,7 +268,7 @@ class RunBazelCiTests(unittest.TestCase):
 
             bazel_args = bazel_args_file.read_text().splitlines()
             self.assertIn("-j=7", bazel_args)
-            self.assertNotIn("--jobs=10", bazel_args)
+            self.assertNotIn("--jobs=1", bazel_args)
 
     def test_remote_fork_tests_respect_local_test_jobs_override(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -314,7 +314,7 @@ class RunBazelCiTests(unittest.TestCase):
 
             bazel_args = bazel_args_file.read_text().splitlines()
             self.assertIn("--local_test_jobs=7", bazel_args)
-            self.assertNotIn("--local_test_jobs=2", bazel_args)
+            self.assertNotIn("--local_test_jobs=1", bazel_args)
 
 
 if __name__ == "__main__":

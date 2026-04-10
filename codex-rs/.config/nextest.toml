@@ -1,5 +1,6 @@
 [profile.default]
 # Do not increase, fix your test instead
+max-threads = 1
 slow-timeout = { period = "15s", terminate-after = 2 }
 
 [test-groups.app_server_protocol_codegen]

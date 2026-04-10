@@ -6061,7 +6061,9 @@ pub(crate) async fn run_turn(
         })
         .collect::<Vec<_>>();
 
-    if run_pending_session_start_hooks(&sess, &turn_context).await {
+    let startup_hook_should_stop = run_pending_session_start_hooks(&sess, &turn_context).await;
+    drain_pending_background_process_completions(&sess, &turn_context).await;
+    if startup_hook_should_stop {
         return None;
     }
     let additional_contexts = if input.is_empty() {
@@ -6135,16 +6137,11 @@ pub(crate) async fn run_turn(
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
 
     loop {
-        if run_pending_session_start_hooks(&sess, &turn_context).await {
+        let session_start_hook_should_stop =
+            run_pending_session_start_hooks(&sess, &turn_context).await;
+        drain_pending_background_process_completions(&sess, &turn_context).await;
+        if session_start_hook_should_stop {
             break;
-        }
-
-        let pending_background_process_completions =
-            sess.take_pending_background_process_completions().await;
-        if !pending_background_process_completions.is_empty() {
-            for completion in pending_background_process_completions {
-                record_background_process_completion(&sess, &turn_context, completion).await;
-            }
         }
 
         // Note that pending_input would be something like a message the user
@@ -6415,6 +6412,17 @@ pub(crate) async fn run_turn(
     }
 
     last_agent_message
+}
+
+async fn drain_pending_background_process_completions(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+) {
+    let pending_background_process_completions =
+        sess.take_pending_background_process_completions().await;
+    for completion in pending_background_process_completions {
+        record_background_process_completion(sess, turn_context, completion).await;
+    }
 }
 
 async fn run_pre_sampling_compact(

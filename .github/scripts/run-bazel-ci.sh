@@ -259,14 +259,14 @@ if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
   if [[ "${GITHUB_REPOSITORY:-}" != "openai/codex" ]]; then
     if [[ $has_jobs_override -eq 0 ]]; then
       # Forks use smaller GitHub-hosted runners than the canonical repository.
-      # Keep authenticated BuildBuddy runs conservative so local Bazel server
-      # pressure and local test execution stay stable across Linux, macOS, and
-      # Windows at the cost of slower wall-clock times.
-      post_config_bazel_args+=(--jobs=10)
+      # Prefer deterministic serialized execution over throughput so the local
+      # Bazel server and test processes stay within the memory/CPU envelope of
+      # free runners across Linux, macOS, and Windows.
+      post_config_bazel_args+=(--jobs=1)
     fi
 
     if [[ "${bazel_args[0]}" == "test" && $has_local_test_jobs_override -eq 0 ]]; then
-      post_config_bazel_args+=(--local_test_jobs=2)
+      post_config_bazel_args+=(--local_test_jobs=1)
     fi
   fi
 
