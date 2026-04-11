@@ -135,13 +135,47 @@ impl ToolHandler for Handler {
             )
             .await
             .map_err(collab_spawn_error);
-        let (new_thread_id, new_agent_metadata, status) = match &result {
+        let status = match &result {
+            Ok(spawned_agent) if turn.config.multi_agent_v2.spawn_agent_blocking_enabled => {
+                match session
+                    .services
+                    .agent_control
+                    .subscribe_status(spawned_agent.thread_id)
+                    .await
+                {
+                    Ok(mut status_rx) => {
+                        let mut status = status_rx.borrow().clone();
+                        while matches!(status, AgentStatus::PendingInit | AgentStatus::Running) {
+                            if status_rx.changed().await.is_err() {
+                                status = session
+                                    .services
+                                    .agent_control
+                                    .get_status(spawned_agent.thread_id)
+                                    .await;
+                                break;
+                            }
+                            status = status_rx.borrow().clone();
+                        }
+                        status
+                    }
+                    Err(_) => {
+                        session
+                            .services
+                            .agent_control
+                            .get_status(spawned_agent.thread_id)
+                            .await
+                    }
+                }
+            }
+            Ok(spawned_agent) => spawned_agent.status.clone(),
+            Err(_) => AgentStatus::NotFound,
+        };
+        let (new_thread_id, new_agent_metadata) = match &result {
             Ok(spawned_agent) => (
                 Some(spawned_agent.thread_id),
                 Some(spawned_agent.metadata.clone()),
-                spawned_agent.status.clone(),
             ),
-            Err(_) => (None, None, AgentStatus::NotFound),
+            Err(_) => (None, None),
         };
         let agent_snapshot = match new_thread_id {
             Some(thread_id) => {
@@ -176,6 +210,11 @@ impl ToolHandler for Handler {
             .and_then(|snapshot| snapshot.reasoning_effort)
             .unwrap_or(args.reasoning_effort.unwrap_or_default());
         let nickname = new_agent_nickname.clone();
+        let return_status = turn
+            .config
+            .multi_agent_v2
+            .spawn_agent_blocking_enabled
+            .then(|| status.clone());
         session
             .send_event(
                 &turn,
@@ -208,11 +247,15 @@ impl ToolHandler for Handler {
 
         let hide_agent_metadata = turn.config.multi_agent_v2.hide_spawn_agent_metadata;
         if hide_agent_metadata {
-            Ok(SpawnAgentResult::HiddenMetadata { task_name })
+            Ok(SpawnAgentResult::HiddenMetadata {
+                task_name,
+                status: return_status,
+            })
         } else {
             Ok(SpawnAgentResult::WithNickname {
                 task_name,
                 nickname,
+                status: return_status,
             })
         }
     }
@@ -275,9 +318,13 @@ pub(crate) enum SpawnAgentResult {
     WithNickname {
         task_name: String,
         nickname: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        status: Option<AgentStatus>,
     },
     HiddenMetadata {
         task_name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        status: Option<AgentStatus>,
     },
 }
 

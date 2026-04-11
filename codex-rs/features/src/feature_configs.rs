@@ -14,6 +14,8 @@ pub struct MultiAgentV2ConfigToml {
     pub usage_hint_text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hide_spawn_agent_metadata: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spawn_agent_blocking_enabled: Option<bool>,
 }
 
 impl FeatureConfig for MultiAgentV2ConfigToml {

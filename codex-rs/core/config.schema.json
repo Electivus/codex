@@ -1015,6 +1015,9 @@
         "hide_spawn_agent_metadata": {
           "type": "boolean"
         },
+        "spawn_agent_blocking_enabled": {
+          "type": "boolean"
+        },
         "usage_hint_enabled": {
           "type": "boolean"
         },
