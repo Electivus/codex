@@ -276,11 +276,16 @@ async fn wait_for_spawn_handoff_status(
         .subscribe_handoff_status(thread_id)
         .await
         .ok();
+    let initial_handoff_sequence = handoff_rx
+        .as_ref()
+        .map(|rx| rx.borrow().sequence)
+        .unwrap_or_default();
 
     loop {
         if let Some(rx) = handoff_rx.as_mut()
-            && rx.borrow().sequence > 0
-            && let Some(status) = rx.borrow().status.clone()
+            && let handoff = rx.borrow().clone()
+            && (handoff.sequence > initial_handoff_sequence || initial_handoff_sequence > 0)
+            && let Some(status) = handoff.status
         {
             return BlockingSpawnHandoffStatus {
                 status,
@@ -310,14 +315,9 @@ async fn wait_for_spawn_handoff_status(
                 handoff_rx = None;
             }
         } else if let Some(wait_deadline) = wait_deadline {
-            let now = Instant::now();
-            if now >= wait_deadline {
-                return BlockingSpawnHandoffStatus {
-                    status,
-                    timed_out: true,
-                };
+            if Instant::now() < wait_deadline {
+                sleep_until(wait_deadline).await;
             }
-            sleep_until(wait_deadline).await;
         } else {
             tokio::time::sleep(BLOCKING_SPAWN_HANDOFF_POLL_INTERVAL).await;
         }
