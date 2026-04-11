@@ -1771,6 +1771,7 @@ async fn turn_start_emits_spawn_agent_item_with_model_metadata_v2() -> Result<()
         "message": CHILD_PROMPT,
         "model": REQUESTED_MODEL,
         "reasoning_effort": REQUESTED_REASONING_EFFORT,
+        "blocking": false,
     }))?;
     let _parent_turn = responses::mount_sse_once_match(
         &server,
@@ -1968,6 +1969,7 @@ async fn turn_start_emits_spawn_agent_item_with_effective_role_model_metadata_v2
         "agent_type": "custom",
         "model": REQUESTED_MODEL,
         "reasoning_effort": REQUESTED_REASONING_EFFORT,
+        "blocking": false,
     }))?;
     let _parent_turn = responses::mount_sse_once_match(
         &server,

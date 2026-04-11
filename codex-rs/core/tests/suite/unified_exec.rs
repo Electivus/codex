@@ -191,7 +191,7 @@ async fn wait_for_request_count(
     expected: usize,
     timeout: Duration,
 ) -> Vec<core_test_support::responses::ResponsesRequest> {
-    tokio::time::timeout(timeout, async {
+    match tokio::time::timeout(timeout, async {
         loop {
             let requests = request_log.requests();
             if requests.len() >= expected {
@@ -201,7 +201,10 @@ async fn wait_for_request_count(
         }
     })
     .await
-    .expect("timed out waiting for expected request count")
+    {
+        Ok(requests) => requests,
+        Err(_) => panic!("timed out waiting for expected request count"),
+    }
 }
 
 async fn create_workspace_directory(

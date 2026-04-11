@@ -99,6 +99,7 @@ impl ToolHandler for Handler {
         let spawned_agent = result?;
         let new_thread_id = spawned_agent.thread_id;
         let new_agent_metadata = spawned_agent.metadata.clone();
+        let initial_status = spawned_agent.status.clone();
         let agent_snapshot = session
             .services
             .agent_control
@@ -138,7 +139,7 @@ impl ToolHandler for Handler {
                 .map(|(_, status)| status)
                 .unwrap_or(AgentStatus::NotFound)
         } else {
-            session.services.agent_control.get_status(new_thread_id).await
+            initial_status
         };
         let nickname = new_agent_nickname.clone();
         session

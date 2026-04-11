@@ -69,6 +69,18 @@ impl MailboxReceiver {
         self.sync_pending_mails();
         self.pending_mails.drain(..).collect()
     }
+
+    pub(crate) fn take_first_matching<F>(
+        &mut self,
+        mut predicate: F,
+    ) -> Option<InterAgentCommunication>
+    where
+        F: FnMut(&InterAgentCommunication) -> bool,
+    {
+        self.sync_pending_mails();
+        let index = self.pending_mails.iter().position(&mut predicate)?;
+        self.pending_mails.remove(index)
+    }
 }
 
 #[cfg(test)]

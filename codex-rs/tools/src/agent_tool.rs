@@ -25,8 +25,7 @@ pub struct WaitAgentTimeoutOptions {
 pub fn create_spawn_agent_tool_v1(options: SpawnAgentToolOptions<'_>) -> ToolSpec {
     let available_models_description = (!options.hide_agent_type_model_reasoning)
         .then(|| spawn_agent_models_description(options.available_models));
-    let return_value_description =
-        "Returns the spawned agent id, the user-facing nickname when available, and the child status observed when control returns to the parent.";
+    let return_value_description = "Returns the spawned agent id, the user-facing nickname when available, and the child status observed when control returns to the parent.";
     let mut properties = spawn_agent_common_properties_v1(&options.agent_type_description);
     if options.hide_agent_type_model_reasoning {
         hide_spawn_agent_metadata_options(&mut properties);

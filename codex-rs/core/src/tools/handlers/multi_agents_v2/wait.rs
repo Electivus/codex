@@ -1,5 +1,10 @@
 use super::*;
+use crate::codex::Session;
+use crate::contextual_user_message::SUBAGENT_NOTIFICATION_CLOSE_TAG;
+use crate::contextual_user_message::SUBAGENT_NOTIFICATION_OPEN_TAG;
+use codex_protocol::protocol::InterAgentCommunication;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::Instant;
 use tokio::time::timeout_at;
@@ -125,4 +130,51 @@ async fn wait_for_mailbox_change(
         Ok(Ok(())) => true,
         Ok(Err(_)) | Err(_) => false,
     }
+}
+
+pub(crate) async fn wait_for_child_boundary_notification(
+    session: Arc<Session>,
+    mailbox_seq_rx: &mut tokio::sync::watch::Receiver<u64>,
+    child_agent_path: &str,
+) -> Result<AgentStatus, FunctionCallError> {
+    loop {
+        if let Some(communication) = session
+            .take_first_matching_mailbox_communication(|communication| {
+                communication.author.as_str() == child_agent_path
+                    && communication
+                        .content
+                        .starts_with(SUBAGENT_NOTIFICATION_OPEN_TAG)
+                    && communication
+                        .content
+                        .ends_with(SUBAGENT_NOTIFICATION_CLOSE_TAG)
+            })
+            .await
+        {
+            return parse_child_boundary_status_from_notification(&communication);
+        }
+
+        mailbox_seq_rx.changed().await.map_err(|_| {
+            FunctionCallError::RespondToModel(
+                "mailbox closed while waiting for child boundary".to_string(),
+            )
+        })?;
+    }
+}
+
+fn parse_child_boundary_status_from_notification(
+    communication: &InterAgentCommunication,
+) -> Result<AgentStatus, FunctionCallError> {
+    let payload = communication
+        .content
+        .strip_prefix(SUBAGENT_NOTIFICATION_OPEN_TAG)
+        .and_then(|content| content.strip_suffix(SUBAGENT_NOTIFICATION_CLOSE_TAG))
+        .ok_or_else(|| {
+            FunctionCallError::RespondToModel("invalid subagent notification envelope".to_string())
+        })?;
+    let payload: serde_json::Value = serde_json::from_str(payload).map_err(|err| {
+        FunctionCallError::RespondToModel(format!("invalid subagent notification payload: {err}"))
+    })?;
+    serde_json::from_value(payload["status"].clone()).map_err(|err| {
+        FunctionCallError::RespondToModel(format!("invalid subagent notification status: {err}"))
+    })
 }

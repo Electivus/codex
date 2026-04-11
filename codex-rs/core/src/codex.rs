@@ -13,7 +13,6 @@ use crate::agent::AgentStatus;
 use crate::agent::Mailbox;
 use crate::agent::MailboxReceiver;
 use crate::agent::agent_status_from_event;
-use crate::agent::status::is_final;
 use crate::apps::render_apps_section;
 use crate::commit_attribution::commit_message_trailer_instruction;
 use crate::compact;
@@ -2805,7 +2804,7 @@ impl Session {
             msg,
         };
         self.send_event_raw(event).await;
-        self.maybe_notify_parent_of_terminal_turn(turn_context, &legacy_source)
+        self.maybe_notify_parent_of_child_turn_boundary(turn_context, &legacy_source)
             .await;
         self.maybe_mirror_event_text_to_realtime(&legacy_source)
             .await;
@@ -2822,8 +2821,8 @@ impl Session {
         }
     }
 
-    /// Forwards terminal turn events from spawned MultiAgentV2 children to their direct parent.
-    async fn maybe_notify_parent_of_terminal_turn(
+    /// Forwards turn-boundary events from spawned MultiAgentV2 children to their direct parent.
+    async fn maybe_notify_parent_of_child_turn_boundary(
         &self,
         turn_context: &TurnContext,
         msg: &EventMsg,
@@ -2848,9 +2847,6 @@ impl Session {
         let Some(status) = agent_status_from_event(msg) else {
             return;
         };
-        if !is_final(&status) {
-            return;
-        }
 
         self.forward_child_completion_to_parent(*parent_thread_id, child_agent_path, status)
             .await;
@@ -4259,6 +4255,16 @@ impl Session {
 
     pub(crate) fn subscribe_mailbox_seq(&self) -> watch::Receiver<u64> {
         self.mailbox.subscribe()
+    }
+
+    pub(crate) async fn take_first_matching_mailbox_communication<F>(
+        &self,
+        predicate: F,
+    ) -> Option<InterAgentCommunication>
+    where
+        F: FnMut(&InterAgentCommunication) -> bool,
+    {
+        self.mailbox_rx.lock().await.take_first_matching(predicate)
     }
 
     pub(crate) fn enqueue_mailbox_communication(&self, communication: InterAgentCommunication) {
