@@ -35,6 +35,13 @@ cargo build
 # Launch the TUI with a sample prompt.
 cargo run --bin codex -- "explain this codebase to me"
 
+# Or, from the repository root, build the current checkout and install it
+# into ~/.local/bin (override with CODEX_INSTALL_DIR=/your/bin/dir).
+cd ..
+./scripts/install/install-local.sh
+# For a debug build instead:
+./scripts/install/install-local.sh --debug
+
 # After making changes, use the root justfile helpers (they default to codex-rs):
 just fmt
 just fix -p <crate-you-touched>
@@ -48,6 +55,10 @@ just test
 # If you specifically want full feature coverage, use:
 cargo test --all-features
 ```
+
+The release installer at `scripts/install/install.sh` downloads a published build and also installs
+the bundled `rg` binary. By contrast, `scripts/install/install-local.sh` builds Codex from your
+current checkout and installs only `codex`, so keep `ripgrep` available on your `PATH`.
 
 ## Tracing / verbose logging
 
