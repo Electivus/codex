@@ -1839,7 +1839,7 @@ async fn multi_agent_v2_spawn_returns_interrupted_status_when_config_enabled() {
 }
 
 #[tokio::test]
-async fn multi_agent_v2_spawn_returns_first_handoff_status_even_if_child_starts_running_again() {
+async fn multi_agent_v2_spawn_returns_first_handoff_status_across_multiple_boundaries() {
     let (mut session, mut turn) = make_session_and_context().await;
     let manager = thread_manager();
     let root = manager
@@ -1901,16 +1901,30 @@ async fn multi_agent_v2_spawn_returns_first_handoff_status_even_if_child_starts_
             }),
         )
         .await;
+    let interrupted_turn = thread.codex.session.new_default_turn().await;
     thread
         .codex
         .session
         .send_event(
-            completed_turn.as_ref(),
+            interrupted_turn.as_ref(),
             EventMsg::TurnStarted(TurnStartedEvent {
-                turn_id: "next-turn".to_string(),
+                turn_id: interrupted_turn.sub_id.clone(),
                 started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
+            }),
+        )
+        .await;
+    thread
+        .codex
+        .session
+        .send_event(
+            interrupted_turn.as_ref(),
+            EventMsg::TurnAborted(TurnAbortedEvent {
+                turn_id: Some(interrupted_turn.sub_id.clone()),
+                reason: TurnAbortReason::Interrupted,
+                completed_at: None,
+                duration_ms: None,
             }),
         )
         .await;
@@ -1954,7 +1968,7 @@ async fn multi_agent_v2_spawn_returns_error_when_handoff_timeout_is_reached() {
     turn.config = Arc::new(config);
 
     let result = timeout(
-        Duration::from_secs(1),
+        Duration::from_secs(2),
         SpawnAgentHandlerV2.handle(invocation(
             Arc::new(session),
             Arc::new(turn),
@@ -1971,7 +1985,7 @@ async fn multi_agent_v2_spawn_returns_error_when_handoff_timeout_is_reached() {
     assert_eq!(
         result.expect_err("spawn_agent should time out"),
         FunctionCallError::RespondToModel(
-            "spawned agent `timeout_worker` did not reach its next turn boundary within 200 ms"
+            "spawned agent `timeout_worker` did not reach its next turn boundary within 500 ms"
                 .to_string(),
         )
     );

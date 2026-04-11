@@ -2939,10 +2939,15 @@ impl Session {
             let handoff_status = status.clone();
             self.agent_status.send_replace(status);
             if is_handoff_boundary(&handoff_status) {
-                let mut handoff = self.agent_handoff.borrow().clone();
-                handoff.sequence += 1;
-                handoff.status = Some(handoff_status);
-                self.agent_handoff.send_replace(handoff);
+                let handoff = self.agent_handoff.borrow().clone();
+                if handoff.sequence == 0 {
+                    // Preserve the first observed handoff boundary so blocking spawn can still
+                    // return it after the child immediately starts a later turn.
+                    self.agent_handoff.send_replace(AgentHandoff {
+                        sequence: 1,
+                        status: Some(handoff_status),
+                    });
+                }
             }
         }
         if let Err(e) = self.tx_event.send(event).await {

@@ -23,9 +23,9 @@ You are a newly spawned agent in a team of agents collaborating to complete a ta
 </spawned_agent_context>"#;
 
 #[cfg(test)]
-const BLOCKING_SPAWN_HANDOFF_TIMEOUT: Duration = Duration::from_millis(200);
+const BLOCKING_SPAWN_HANDOFF_TIMEOUT: Option<Duration> = Some(Duration::from_millis(500));
 #[cfg(not(test))]
-const BLOCKING_SPAWN_HANDOFF_TIMEOUT: Duration = Duration::from_secs(5);
+const BLOCKING_SPAWN_HANDOFF_TIMEOUT: Option<Duration> = None;
 const BLOCKING_SPAWN_HANDOFF_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 impl ToolHandler for Handler {
@@ -222,11 +222,12 @@ impl ToolHandler for Handler {
             .await;
         if let Some(wait_result) = blocking_wait
             && wait_result.timed_out
+            && let Some(timeout) = BLOCKING_SPAWN_HANDOFF_TIMEOUT
         {
             return Err(FunctionCallError::RespondToModel(format!(
                 "spawned agent `{}` did not reach its next turn boundary within {} ms",
                 args.task_name,
-                BLOCKING_SPAWN_HANDOFF_TIMEOUT.as_millis()
+                timeout.as_millis()
             )));
         }
         let _ = result?;
@@ -268,7 +269,7 @@ async fn wait_for_spawn_handoff_status(
     session: &crate::codex::Session,
     thread_id: ThreadId,
 ) -> BlockingSpawnHandoffStatus {
-    let deadline = Instant::now() + BLOCKING_SPAWN_HANDOFF_TIMEOUT;
+    let deadline = BLOCKING_SPAWN_HANDOFF_TIMEOUT.map(|timeout| Instant::now() + timeout);
     let mut handoff_rx = session
         .services
         .agent_control
@@ -277,15 +278,8 @@ async fn wait_for_spawn_handoff_status(
         .ok();
 
     loop {
-        let status = session.services.agent_control.get_status(thread_id).await;
-        if is_handoff_boundary(&status) {
-            return BlockingSpawnHandoffStatus {
-                status,
-                timed_out: false,
-            };
-        }
-
         if let Some(rx) = handoff_rx.as_mut()
+            && rx.borrow().sequence > 0
             && let Some(status) = rx.borrow().status.clone()
         {
             return BlockingSpawnHandoffStatus {
@@ -294,24 +288,47 @@ async fn wait_for_spawn_handoff_status(
             };
         }
 
-        let now = Instant::now();
-        if now >= deadline {
+        let status = session.services.agent_control.get_status(thread_id).await;
+        if is_handoff_boundary(&status) {
             return BlockingSpawnHandoffStatus {
                 status,
-                timed_out: true,
+                timed_out: false,
             };
         }
 
-        let wait_deadline = deadline.min(now + BLOCKING_SPAWN_HANDOFF_POLL_INTERVAL);
+        let wait_deadline = deadline
+            .map(|deadline| deadline.min(Instant::now() + BLOCKING_SPAWN_HANDOFF_POLL_INTERVAL));
         if let Some(rx) = handoff_rx.as_mut() {
-            match timeout_at(wait_deadline, rx.changed()).await {
-                Ok(Ok(())) | Err(_) => {}
-                Ok(Err(_)) => {
-                    handoff_rx = None;
+            if let Some(wait_deadline) = wait_deadline {
+                match timeout_at(wait_deadline, rx.changed()).await {
+                    Ok(Ok(())) | Err(_) => {}
+                    Ok(Err(_)) => {
+                        handoff_rx = None;
+                    }
                 }
+            } else if rx.changed().await.is_err() {
+                handoff_rx = None;
             }
-        } else {
+        } else if let Some(wait_deadline) = wait_deadline {
+            let now = Instant::now();
+            if now >= wait_deadline {
+                return BlockingSpawnHandoffStatus {
+                    status,
+                    timed_out: true,
+                };
+            }
             sleep_until(wait_deadline).await;
+        } else {
+            tokio::time::sleep(BLOCKING_SPAWN_HANDOFF_POLL_INTERVAL).await;
+        }
+
+        if let Some(deadline) = deadline
+            && Instant::now() >= deadline
+        {
+            return BlockingSpawnHandoffStatus {
+                status: session.services.agent_control.get_status(thread_id).await,
+                timed_out: true,
+            };
         }
     }
 }
