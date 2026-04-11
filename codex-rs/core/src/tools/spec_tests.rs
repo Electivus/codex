@@ -697,8 +697,8 @@ fn spawn_agent_description_uses_configured_usage_hint_text() {
 
 #[test]
 fn spawn_agent_description_mentions_turn_boundary_when_blocking_enabled() {
-    let tools_config =
-        multi_agent_v2_tools_config().with_spawn_agent_blocking_enabled(/*value*/ true);
+    let tools_config = multi_agent_v2_tools_config()
+        .with_spawn_agent_blocking_enabled(/*spawn_agent_blocking_enabled*/ true);
     let description = multi_agent_v2_spawn_agent_description(&tools_config);
 
     assert!(
