@@ -96,17 +96,26 @@ impl ToolHandler for Handler {
             )
             .await
             .map_err(collab_spawn_error);
-        let spawned_agent = result?;
-        let new_thread_id = spawned_agent.thread_id;
-        let new_agent_metadata = spawned_agent.metadata.clone();
-        let initial_status = spawned_agent.status.clone();
-        let agent_snapshot = session
-            .services
-            .agent_control
-            .get_agent_config_snapshot(new_thread_id)
-            .await;
+        let (new_thread_id, new_agent_metadata, initial_status) = match &result {
+            Ok(spawned_agent) => (
+                Some(spawned_agent.thread_id),
+                Some(spawned_agent.metadata.clone()),
+                spawned_agent.status.clone(),
+            ),
+            Err(_) => (None, None, AgentStatus::NotFound),
+        };
+        let agent_snapshot = match new_thread_id {
+            Some(thread_id) => {
+                session
+                    .services
+                    .agent_control
+                    .get_agent_config_snapshot(thread_id)
+                    .await
+            }
+            None => None,
+        };
         let (_new_agent_path, new_agent_nickname, new_agent_role) =
-            match (&agent_snapshot, Some(new_agent_metadata)) {
+            match (&agent_snapshot, new_agent_metadata) {
                 (Some(snapshot), _) => (
                     snapshot.session_source.get_agent_path().map(String::from),
                     snapshot.session_source.get_nickname(),
@@ -128,16 +137,21 @@ impl ToolHandler for Handler {
             .and_then(|snapshot| snapshot.reasoning_effort)
             .unwrap_or(args.reasoning_effort.unwrap_or_default());
         let status = if blocking {
-            let status_rx = session
-                .services
-                .agent_control
-                .subscribe_status(new_thread_id)
-                .await
-                .map_err(|err| collab_agent_error(new_thread_id, err))?;
-            wait_for_agent_handoff_status(session.clone(), new_thread_id, status_rx)
-                .await
-                .map(|(_, status)| status)
-                .unwrap_or(AgentStatus::NotFound)
+            match new_thread_id {
+                Some(thread_id) => {
+                    let status_rx = session
+                        .services
+                        .agent_control
+                        .subscribe_status(thread_id)
+                        .await
+                        .map_err(|err| collab_agent_error(thread_id, err))?;
+                    wait_for_agent_handoff_status(session.clone(), thread_id, status_rx)
+                        .await
+                        .map(|(_, status)| status)
+                        .unwrap_or(AgentStatus::NotFound)
+                }
+                None => initial_status.clone(),
+            }
         } else {
             initial_status
         };
@@ -148,7 +162,7 @@ impl ToolHandler for Handler {
                 CollabAgentSpawnEndEvent {
                     call_id,
                     sender_thread_id: session.conversation_id,
-                    new_thread_id: Some(new_thread_id),
+                    new_thread_id,
                     new_agent_nickname,
                     new_agent_role,
                     prompt,
@@ -165,6 +179,7 @@ impl ToolHandler for Handler {
             /*inc*/ 1,
             &[("role", role_tag)],
         );
+        let new_thread_id = result?.thread_id;
 
         Ok(SpawnAgentResult {
             agent_id: new_thread_id.to_string(),

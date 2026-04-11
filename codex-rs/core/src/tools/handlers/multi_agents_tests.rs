@@ -612,10 +612,10 @@ async fn multi_agent_v2_spawn_rejects_legacy_items_field() {
 
 #[tokio::test]
 async fn spawn_agent_errors_when_manager_dropped() {
-    let (session, turn) = make_session_and_context().await;
+    let (session, turn, rx) = crate::codex::make_session_and_context_with_rx().await;
     let invocation = invocation(
-        Arc::new(session),
-        Arc::new(turn),
+        session.clone(),
+        turn.clone(),
         "spawn_agent",
         function_payload(json!({"message": "hello"})),
     );
@@ -626,6 +626,74 @@ async fn spawn_agent_errors_when_manager_dropped() {
         err,
         FunctionCallError::RespondToModel("collab manager unavailable".to_string())
     );
+
+    let mut saw_begin = false;
+    let mut spawn_end = None;
+    while let Ok(event) = rx.try_recv() {
+        match event.msg {
+            EventMsg::CollabAgentSpawnBegin(begin_event) if begin_event.call_id == "call-1" => {
+                saw_begin = true;
+            }
+            EventMsg::CollabAgentSpawnEnd(end_event) if end_event.call_id == "call-1" => {
+                spawn_end = Some(end_event);
+            }
+            _ => {}
+        }
+    }
+
+    assert!(
+        saw_begin,
+        "spawn handler should emit spawn begin before failing"
+    );
+    let spawn_end = spawn_end.expect("spawn handler should emit spawn end on failure");
+    assert_eq!(spawn_end.sender_thread_id, session.conversation_id);
+    assert_eq!(spawn_end.new_thread_id, None);
+    assert_eq!(spawn_end.status, AgentStatus::NotFound);
+}
+
+#[tokio::test]
+async fn multi_agent_v2_spawn_errors_when_manager_dropped_emits_spawn_end() {
+    let (session, turn, rx) = crate::codex::make_session_and_context_with_rx().await;
+
+    let invocation = invocation(
+        session.clone(),
+        turn,
+        "spawn_agent",
+        function_payload(json!({
+            "message": "hello",
+            "task_name": "worker"
+        })),
+    );
+    let Err(err) = SpawnAgentHandlerV2.handle(invocation).await else {
+        panic!("spawn should fail without a manager");
+    };
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel("collab manager unavailable".to_string())
+    );
+
+    let mut saw_begin = false;
+    let mut spawn_end = None;
+    while let Ok(event) = rx.try_recv() {
+        match event.msg {
+            EventMsg::CollabAgentSpawnBegin(begin_event) if begin_event.call_id == "call-1" => {
+                saw_begin = true;
+            }
+            EventMsg::CollabAgentSpawnEnd(end_event) if end_event.call_id == "call-1" => {
+                spawn_end = Some(end_event);
+            }
+            _ => {}
+        }
+    }
+
+    assert!(
+        saw_begin,
+        "spawn handler should emit spawn begin before failing"
+    );
+    let spawn_end = spawn_end.expect("spawn handler should emit spawn end on failure");
+    assert_eq!(spawn_end.sender_thread_id, session.conversation_id);
+    assert_eq!(spawn_end.new_thread_id, None);
+    assert_eq!(spawn_end.status, AgentStatus::NotFound);
 }
 
 #[tokio::test]

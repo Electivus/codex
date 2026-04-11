@@ -828,7 +828,8 @@ async fn background_completion_auto_wakes_idle_thread() -> Result<()> {
     )
     .await;
 
-    let requests = wait_for_request_count(&request_log, 3, Duration::from_secs(15)).await;
+    let requests =
+        wait_for_request_count(&request_log, /*expected*/ 3, Duration::from_secs(15)).await;
     assert_eq!(
         requests.len(),
         3,
