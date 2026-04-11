@@ -1,3 +1,4 @@
+use crate::agent::AgentHandoff;
 use crate::agent::AgentStatus;
 use crate::codex::Codex;
 use crate::codex::SteerInputError;
@@ -130,6 +131,10 @@ impl CodexThread {
 
     pub(crate) fn subscribe_status(&self) -> watch::Receiver<AgentStatus> {
         self.codex.agent_status.clone()
+    }
+
+    pub(crate) fn subscribe_handoff_status(&self) -> watch::Receiver<AgentHandoff> {
+        self.codex.agent_handoff.clone()
     }
 
     pub(crate) async fn total_token_usage(&self) -> Option<TokenUsage> {

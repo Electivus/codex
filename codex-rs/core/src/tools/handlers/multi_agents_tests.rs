@@ -43,6 +43,7 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
+use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::user_input::UserInput;
 use core_test_support::TempDirExt;
 use pretty_assertions::assert_eq;
@@ -1835,6 +1836,145 @@ async fn multi_agent_v2_spawn_returns_interrupted_status_when_config_enabled() {
         }
     );
     assert_eq!(success, Some(true));
+}
+
+#[tokio::test]
+async fn multi_agent_v2_spawn_returns_first_handoff_status_even_if_child_starts_running_again() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.conversation_id = root.thread_id;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    config.multi_agent_v2.spawn_agent_blocking_enabled = true;
+    turn.config = Arc::new(config);
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+
+    let spawn_task = tokio::spawn({
+        let session = session.clone();
+        let turn = turn.clone();
+        async move {
+            SpawnAgentHandlerV2
+                .handle(invocation(
+                    session,
+                    turn,
+                    "spawn_agent",
+                    function_payload(json!({
+                        "message": "inspect this repo",
+                        "task_name": "handoff_then_running"
+                    })),
+                ))
+                .await
+        }
+    });
+
+    let agent_id = wait_for_agent_reference(&session, &turn, "handoff_then_running").await;
+    let thread = manager
+        .get_thread(agent_id)
+        .await
+        .expect("worker thread should exist");
+    let agent_nickname = session
+        .services
+        .agent_control
+        .get_agent_metadata(agent_id)
+        .expect("worker metadata")
+        .agent_nickname;
+    let completed_turn = thread.codex.session.new_default_turn().await;
+    thread
+        .codex
+        .session
+        .send_event(
+            completed_turn.as_ref(),
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: completed_turn.sub_id.clone(),
+                last_agent_message: Some("done".to_string()),
+                completed_at: None,
+                duration_ms: None,
+            }),
+        )
+        .await;
+    thread
+        .codex
+        .session
+        .send_event(
+            completed_turn.as_ref(),
+            EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "next-turn".to_string(),
+                started_at: None,
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }),
+        )
+        .await;
+
+    let output = timeout(Duration::from_secs(5), spawn_task)
+        .await
+        .expect("blocking spawn should return")
+        .expect("spawn task should join")
+        .expect("spawn_agent should succeed");
+    let (content, success) = expect_text_output(output);
+    let result: BlockingSpawnAgentResult =
+        serde_json::from_str(&content).expect("spawn_agent result should be json");
+
+    assert_eq!(
+        result,
+        BlockingSpawnAgentResult {
+            task_name: "/root/handoff_then_running".to_string(),
+            nickname: agent_nickname,
+            status: AgentStatus::Completed(Some("done".to_string())),
+        }
+    );
+    assert_eq!(success, Some(true));
+}
+
+#[tokio::test]
+async fn multi_agent_v2_spawn_returns_error_when_handoff_timeout_is_reached() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.conversation_id = root.thread_id;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    config.multi_agent_v2.spawn_agent_blocking_enabled = true;
+    turn.config = Arc::new(config);
+
+    let result = timeout(
+        Duration::from_secs(1),
+        SpawnAgentHandlerV2.handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "task_name": "timeout_worker"
+            })),
+        )),
+    )
+    .await
+    .expect("blocking spawn should finish");
+
+    assert_eq!(
+        result.expect_err("spawn_agent should time out"),
+        FunctionCallError::RespondToModel(
+            "spawned agent `timeout_worker` did not reach its next turn boundary within 200 ms"
+                .to_string(),
+        )
+    );
 }
 
 #[tokio::test]

@@ -9,11 +9,13 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 use crate::agent::AgentControl;
+use crate::agent::AgentHandoff;
 use crate::agent::AgentStatus;
 use crate::agent::Mailbox;
 use crate::agent::MailboxReceiver;
 use crate::agent::agent_status_from_event;
 use crate::agent::status::is_final;
+use crate::agent::status::is_handoff_boundary;
 use crate::apps::render_apps_section;
 use crate::commit_attribution::commit_message_trailer_instruction;
 use crate::compact;
@@ -403,6 +405,7 @@ pub struct Codex {
     pub(crate) rx_event: Receiver<Event>,
     // Last known status of the agent.
     pub(crate) agent_status: watch::Receiver<AgentStatus>,
+    pub(crate) agent_handoff: watch::Receiver<AgentHandoff>,
     pub(crate) session: Arc<Session>,
     // Shared future for the background submission loop completion so multiple
     // callers can wait for shutdown.
@@ -665,6 +668,7 @@ impl Codex {
         // Generate a unique ID for the lifetime of this Codex session.
         let session_source_clone = session_configuration.session_source.clone();
         let (agent_status_tx, agent_status_rx) = watch::channel(AgentStatus::PendingInit);
+        let (agent_handoff_tx, agent_handoff_rx) = watch::channel(AgentHandoff::default());
 
         let session = Session::new(
             session_configuration,
@@ -674,6 +678,7 @@ impl Codex {
             exec_policy,
             tx_event.clone(),
             agent_status_tx.clone(),
+            agent_handoff_tx,
             conversation_history,
             session_source_clone,
             skills_manager,
@@ -702,6 +707,7 @@ impl Codex {
             tx_sub,
             rx_event,
             agent_status: agent_status_rx,
+            agent_handoff: agent_handoff_rx,
             session,
             session_loop_termination: session_loop_termination_from_handle(session_loop_handle),
         };
@@ -827,6 +833,7 @@ pub(crate) struct Session {
     pub(crate) conversation_id: ThreadId,
     tx_event: Sender<Event>,
     agent_status: watch::Sender<AgentStatus>,
+    agent_handoff: watch::Sender<AgentHandoff>,
     out_of_band_elicitation_paused: watch::Sender<bool>,
     state: Mutex<SessionState>,
     /// Serializes rebuild/apply cycles for the running proxy; each cycle
@@ -1607,6 +1614,7 @@ impl Session {
         exec_policy: Arc<ExecPolicyManager>,
         tx_event: Sender<Event>,
         agent_status: watch::Sender<AgentStatus>,
+        agent_handoff: watch::Sender<AgentHandoff>,
         initial_history: InitialHistory,
         session_source: SessionSource,
         skills_manager: Arc<SkillsManager>,
@@ -2072,6 +2080,7 @@ impl Session {
             conversation_id,
             tx_event: tx_event.clone(),
             agent_status,
+            agent_handoff,
             out_of_band_elicitation_paused,
             state: Mutex::new(state),
             managed_network_proxy_refresh_lock: Mutex::new(()),
@@ -2927,7 +2936,14 @@ impl Session {
     async fn deliver_event_raw(&self, event: Event) {
         // Record the last known agent status.
         if let Some(status) = agent_status_from_event(&event.msg) {
+            let handoff_status = status.clone();
             self.agent_status.send_replace(status);
+            if is_handoff_boundary(&handoff_status) {
+                let mut handoff = self.agent_handoff.borrow().clone();
+                handoff.sequence += 1;
+                handoff.status = Some(handoff_status);
+                self.agent_handoff.send_replace(handoff);
+            }
         }
         if let Err(e) = self.tx_event.send(event).await {
             debug!("dropping event because channel is closed: {e}");

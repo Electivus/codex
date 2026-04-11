@@ -11,4 +11,5 @@ pub(crate) use mailbox::Mailbox;
 pub(crate) use mailbox::MailboxReceiver;
 pub(crate) use registry::exceeds_thread_spawn_depth_limit;
 pub(crate) use registry::next_thread_spawn_depth;
+pub(crate) use status::AgentHandoff;
 pub(crate) use status::agent_status_from_event;

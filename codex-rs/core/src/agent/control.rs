@@ -3,6 +3,7 @@ use crate::agent::registry::AgentMetadata;
 use crate::agent::registry::AgentRegistry;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::resolve_role_config;
+use crate::agent::status::AgentHandoff;
 use crate::agent::status::is_final;
 use crate::codex::emit_subagent_session_started;
 use crate::codex_thread::ThreadConfigSnapshot;
@@ -782,6 +783,15 @@ impl AgentControl {
         let state = self.upgrade()?;
         let thread = state.get_thread(agent_id).await?;
         Ok(thread.subscribe_status())
+    }
+
+    pub(crate) async fn subscribe_handoff_status(
+        &self,
+        agent_id: ThreadId,
+    ) -> CodexResult<watch::Receiver<AgentHandoff>> {
+        let state = self.upgrade()?;
+        let thread = state.get_thread(agent_id).await?;
+        Ok(thread.subscribe_handoff_status())
     }
 
     pub(crate) async fn get_total_token_usage(&self, agent_id: ThreadId) -> Option<TokenUsage> {

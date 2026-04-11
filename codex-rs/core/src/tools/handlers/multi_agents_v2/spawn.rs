@@ -5,16 +5,28 @@ use crate::agent::control::render_input_preview;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::apply_role_to_config;
+use crate::agent::status::is_handoff_boundary;
 use codex_protocol::AgentPath;
+use codex_protocol::ThreadId;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::Op;
+use std::time::Duration;
+use tokio::time::Instant;
+use tokio::time::sleep_until;
+use tokio::time::timeout_at;
 
 pub(crate) struct Handler;
 
 pub(crate) const SPAWN_AGENT_DEVELOPER_INSTRUCTIONS: &str = r#"<spawned_agent_context>
 You are a newly spawned agent in a team of agents collaborating to complete a task. You can spawn sub-agents to handle subtasks, and those sub-agents can spawn their own sub-agents. You are responsible for returning the response to your assigned task in the final channel. When you give your response, the contents of your response in the final channel will be immediately delivered back to your parent agent. The prior conversation history was forked from your parent agent. Treat the next user message as your assigned task, and use the forked history only as background context.
 </spawned_agent_context>"#;
+
+#[cfg(test)]
+const BLOCKING_SPAWN_HANDOFF_TIMEOUT: Duration = Duration::from_millis(200);
+#[cfg(not(test))]
+const BLOCKING_SPAWN_HANDOFF_TIMEOUT: Duration = Duration::from_secs(5);
+const BLOCKING_SPAWN_HANDOFF_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 impl ToolHandler for Handler {
     type Output = SpawnAgentResult;
@@ -135,40 +147,16 @@ impl ToolHandler for Handler {
             )
             .await
             .map_err(collab_spawn_error);
-        let status = match &result {
+        let blocking_wait = match &result {
             Ok(spawned_agent) if turn.config.multi_agent_v2.spawn_agent_blocking_enabled => {
-                match session
-                    .services
-                    .agent_control
-                    .subscribe_status(spawned_agent.thread_id)
-                    .await
-                {
-                    Ok(mut status_rx) => {
-                        let mut status = status_rx.borrow().clone();
-                        while matches!(status, AgentStatus::PendingInit | AgentStatus::Running) {
-                            if status_rx.changed().await.is_err() {
-                                status = session
-                                    .services
-                                    .agent_control
-                                    .get_status(spawned_agent.thread_id)
-                                    .await;
-                                break;
-                            }
-                            status = status_rx.borrow().clone();
-                        }
-                        status
-                    }
-                    Err(_) => {
-                        session
-                            .services
-                            .agent_control
-                            .get_status(spawned_agent.thread_id)
-                            .await
-                    }
-                }
+                Some(wait_for_spawn_handoff_status(session.as_ref(), spawned_agent.thread_id).await)
             }
-            Ok(spawned_agent) => spawned_agent.status.clone(),
-            Err(_) => AgentStatus::NotFound,
+            _ => None,
+        };
+        let status = match (&result, &blocking_wait) {
+            (_, Some(wait_result)) => wait_result.status.clone(),
+            (Ok(spawned_agent), None) => spawned_agent.status.clone(),
+            (Err(_), None) => AgentStatus::NotFound,
         };
         let (new_thread_id, new_agent_metadata) = match &result {
             Ok(spawned_agent) => (
@@ -232,6 +220,15 @@ impl ToolHandler for Handler {
                 .into(),
             )
             .await;
+        if let Some(wait_result) = blocking_wait
+            && wait_result.timed_out
+        {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "spawned agent `{}` did not reach its next turn boundary within {} ms",
+                args.task_name,
+                BLOCKING_SPAWN_HANDOFF_TIMEOUT.as_millis()
+            )));
+        }
         let _ = result?;
         let role_tag = role_name.unwrap_or(DEFAULT_ROLE_NAME);
         turn.session_telemetry.counter(
@@ -257,6 +254,64 @@ impl ToolHandler for Handler {
                 nickname,
                 status: return_status,
             })
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct BlockingSpawnHandoffStatus {
+    status: AgentStatus,
+    timed_out: bool,
+}
+
+async fn wait_for_spawn_handoff_status(
+    session: &crate::codex::Session,
+    thread_id: ThreadId,
+) -> BlockingSpawnHandoffStatus {
+    let deadline = Instant::now() + BLOCKING_SPAWN_HANDOFF_TIMEOUT;
+    let mut handoff_rx = session
+        .services
+        .agent_control
+        .subscribe_handoff_status(thread_id)
+        .await
+        .ok();
+
+    loop {
+        let status = session.services.agent_control.get_status(thread_id).await;
+        if is_handoff_boundary(&status) {
+            return BlockingSpawnHandoffStatus {
+                status,
+                timed_out: false,
+            };
+        }
+
+        if let Some(rx) = handoff_rx.as_mut()
+            && let Some(status) = rx.borrow().status.clone()
+        {
+            return BlockingSpawnHandoffStatus {
+                status,
+                timed_out: false,
+            };
+        }
+
+        let now = Instant::now();
+        if now >= deadline {
+            return BlockingSpawnHandoffStatus {
+                status,
+                timed_out: true,
+            };
+        }
+
+        let wait_deadline = deadline.min(now + BLOCKING_SPAWN_HANDOFF_POLL_INTERVAL);
+        if let Some(rx) = handoff_rx.as_mut() {
+            match timeout_at(wait_deadline, rx.changed()).await {
+                Ok(Ok(())) | Err(_) => {}
+                Ok(Err(_)) => {
+                    handoff_rx = None;
+                }
+            }
+        } else {
+            sleep_until(wait_deadline).await;
         }
     }
 }
