@@ -79,6 +79,7 @@ use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
 use codex_login::default_client::originator;
 use codex_mcp::McpConnectionManager;
 use codex_mcp::SandboxState;
+use codex_mcp::ToolInfo;
 use codex_mcp::codex_apps_tools_cache_key;
 #[cfg(test)]
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
@@ -604,7 +605,7 @@ impl Codex {
             let thread_id = match &conversation_history {
                 InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
                 InitialHistory::Forked(_) => conversation_history.forked_from_id(),
-                InitialHistory::New => None,
+                InitialHistory::New | InitialHistory::Cleared => None,
             };
             match thread_id {
                 Some(thread_id) => {
@@ -1633,7 +1634,7 @@ impl Session {
         let forked_from_id = initial_history.forked_from_id();
 
         let (conversation_id, rollout_params) = match &initial_history {
-            InitialHistory::New | InitialHistory::Forked(_) => {
+            InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => {
                 let conversation_id = ThreadId::default();
                 (
                     conversation_id,
@@ -1674,14 +1675,14 @@ impl Session {
                     .count(),
             )
             .unwrap_or(u64::MAX),
-            InitialHistory::New | InitialHistory::Forked(_) => 0,
+            InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => 0,
         };
         let state_builder = match &initial_history {
             InitialHistory::Resumed(resumed) => metadata::builder_from_items(
                 resumed.history.as_slice(),
                 resumed.rollout_path.as_path(),
             ),
-            InitialHistory::New | InitialHistory::Forked(_) => None,
+            InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => None,
         };
 
         // Kick off independent async setup tasks in parallel to reduce startup latency.
@@ -2040,7 +2041,7 @@ impl Session {
             session_telemetry,
             models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
-            guardian_rejection_rationales: Mutex::new(HashMap::new()),
+            guardian_rejections: Mutex::new(HashMap::new()),
             skills_manager,
             plugins_manager: Arc::clone(&plugins_manager),
             mcp_manager: Arc::clone(&mcp_manager),
@@ -2214,6 +2215,7 @@ impl Session {
             InitialHistory::New | InitialHistory::Forked(_) => {
                 codex_hooks::SessionStartSource::Startup
             }
+            InitialHistory::Cleared => codex_hooks::SessionStartSource::Clear,
         };
 
         // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
@@ -2354,7 +2356,7 @@ impl Session {
             )
         };
         match conversation_history {
-            InitialHistory::New => {
+            InitialHistory::New | InitialHistory::Cleared => {
                 // Defer initial context insertion until the first real turn starts so
                 // turn/start overrides can be merged before we write model-visible context.
                 self.set_previous_turn_settings(/*previous_turn_settings*/ None)
@@ -4485,25 +4487,16 @@ impl Session {
             .await
     }
 
-    pub(crate) async fn parse_mcp_tool_name(
+    pub(crate) async fn resolve_mcp_tool_info(
         &self,
         name: &str,
-        namespace: &Option<String>,
-    ) -> Option<(String, String)> {
-        let tool_name = if let Some(namespace) = namespace {
-            if name.starts_with(namespace.as_str()) {
-                name
-            } else {
-                &format!("{namespace}{name}")
-            }
-        } else {
-            name
-        };
+        namespace: Option<&str>,
+    ) -> Option<ToolInfo> {
         self.services
             .mcp_connection_manager
             .read()
             .await
-            .parse_tool_name(tool_name)
+            .resolve_tool_info(name, namespace)
             .await
     }
 
@@ -4869,10 +4862,6 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     handlers::set_thread_name(&sess, sub.id.clone(), name).await;
                     false
                 }
-                Op::SendAddCreditsNudgeEmail => {
-                    handlers::send_add_credits_nudge_email(&sess, &config, sub.id.clone()).await;
-                    false
-                }
                 Op::RunUserShellCommand { command } => {
                     handlers::run_user_shell_command(&sess, sub.id.clone(), command).await;
                     false
@@ -4969,8 +4958,6 @@ mod handlers {
     use crate::tasks::execute_user_shell_command;
     use codex_mcp::collect_mcp_snapshot_from_manager;
     use codex_mcp::compute_auth_statuses;
-    use codex_protocol::protocol::AddCreditsNudgeEmailResponseEvent;
-    use codex_protocol::protocol::AddCreditsNudgeEmailStatus;
     use codex_protocol::protocol::CodexErrorInfo;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
@@ -5013,48 +5000,6 @@ mod handlers {
 
     pub async fn clean_background_terminals(sess: &Arc<Session>) {
         sess.close_unified_exec_processes().await;
-    }
-
-    pub async fn send_add_credits_nudge_email(
-        sess: &Arc<Session>,
-        config: &Config,
-        sub_id: String,
-    ) {
-        match crate::send_add_credits_nudge_email(config, &sess.services.auth_manager).await {
-            Ok(status) => {
-                sess.send_event_raw(Event {
-                    id: sub_id,
-                    msg: EventMsg::AddCreditsNudgeEmailResponse(
-                        AddCreditsNudgeEmailResponseEvent {
-                            result: Ok(add_credits_nudge_email_status_to_event(status)),
-                        },
-                    ),
-                })
-                .await;
-            }
-            Err(err) => {
-                sess.send_event_raw(Event {
-                    id: sub_id,
-                    msg: EventMsg::AddCreditsNudgeEmailResponse(
-                        AddCreditsNudgeEmailResponseEvent {
-                            result: Err(err.to_string()),
-                        },
-                    ),
-                })
-                .await;
-            }
-        }
-    }
-
-    fn add_credits_nudge_email_status_to_event(
-        status: crate::AddCreditsNudgeEmailStatus,
-    ) -> AddCreditsNudgeEmailStatus {
-        match status {
-            crate::AddCreditsNudgeEmailStatus::Sent => AddCreditsNudgeEmailStatus::Sent,
-            crate::AddCreditsNudgeEmailStatus::CooldownActive => {
-                AddCreditsNudgeEmailStatus::CooldownActive
-            }
-        }
     }
 
     pub async fn realtime_conversation_list_voices(sess: &Session, sub_id: String) {
@@ -7392,7 +7337,6 @@ fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::GetHistoryEntryResponse(_)
         | EventMsg::McpListToolsResponse(_)
         | EventMsg::ListSkillsResponse(_)
-        | EventMsg::AddCreditsNudgeEmailResponse(_)
         | EventMsg::RealtimeConversationListVoicesResponse(_)
         | EventMsg::SkillsUpdateAvailable
         | EventMsg::PlanUpdate(_)
