@@ -105,6 +105,8 @@ require_command cargo
 require_command cp
 require_command chmod
 require_command mkdir
+require_command mktemp
+require_command mv
 
 SCRIPT_DIR=$(
   CDPATH= cd -- "$(dirname -- "$0")"
@@ -147,8 +149,12 @@ fi
 
 step "Installing to $INSTALL_DIR"
 mkdir -p "$INSTALL_DIR"
-cp "$BINARY_PATH" "$INSTALL_DIR/codex"
-chmod 0755 "$INSTALL_DIR/codex"
+temp_binary=$(mktemp "$INSTALL_DIR/codex.tmp.XXXXXX")
+trap 'rm -f "${temp_binary:-}"' EXIT HUP INT TERM
+cp "$BINARY_PATH" "$temp_binary"
+chmod 0755 "$temp_binary"
+mv -f "$temp_binary" "$INSTALL_DIR/codex"
+trap - EXIT HUP INT TERM
 
 add_to_path
 
