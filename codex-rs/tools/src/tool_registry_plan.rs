@@ -387,7 +387,7 @@ pub fn build_tool_registry_plan(
                 config.code_mode_enabled,
             );
             plan.push_spec(
-                create_followup_task_tool(),
+                create_followup_task_tool(config.spawn_agent_blocking_enabled),
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
             );

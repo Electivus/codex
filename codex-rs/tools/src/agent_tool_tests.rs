@@ -181,13 +181,13 @@ fn send_message_tool_requires_message_and_has_no_output_schema() {
 }
 
 #[test]
-fn followup_task_tool_requires_message_and_has_no_output_schema() {
+fn followup_task_tool_requires_message_and_has_no_output_schema_when_blocking_disabled() {
     let ToolSpec::Function(ResponsesApiTool {
         description,
         parameters,
         output_schema,
         ..
-    }) = create_followup_task_tool()
+    }) = create_followup_task_tool(/*blocking_enabled*/ false)
     else {
         panic!("followup_task should be a function tool");
     };
@@ -222,6 +222,27 @@ fn followup_task_tool_requires_message_and_has_no_output_schema() {
         Some(&vec!["target".to_string(), "message".to_string()])
     );
     assert_eq!(output_schema, None);
+}
+
+#[test]
+fn followup_task_tool_blocking_output_includes_status() {
+    let ToolSpec::Function(ResponsesApiTool {
+        description,
+        output_schema,
+        ..
+    }) = create_followup_task_tool(/*blocking_enabled*/ true)
+    else {
+        panic!("followup_task should be a function tool");
+    };
+
+    assert!(
+        description
+            .contains("This call waits until the target agent reaches its next turn boundary")
+    );
+    assert_eq!(
+        output_schema.expect("followup_task output schema")["required"],
+        json!(["status"])
+    );
 }
 
 #[test]
