@@ -40,6 +40,10 @@ impl Mailbox {
         self.seq_tx.subscribe()
     }
 
+    pub(crate) fn current_sequence(&self) -> u64 {
+        self.next_seq.load(Ordering::Relaxed)
+    }
+
     pub(crate) fn send(&self, communication: InterAgentCommunication) -> u64 {
         let seq = self.next_seq.fetch_add(1, Ordering::Relaxed) + 1;
         let _ = self.tx.send(communication);

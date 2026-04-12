@@ -1,10 +1,61 @@
+use std::collections::VecDeque;
+
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::EventMsg;
+
+const AGENT_HANDOFF_HISTORY_LIMIT: usize = 8;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AgentHandoffBoundary {
+    sequence: u64,
+    mailbox_sequence: u64,
+    status: AgentStatus,
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct AgentHandoff {
     pub(crate) sequence: u64,
     pub(crate) status: Option<AgentStatus>,
+    recent_statuses: VecDeque<AgentHandoffBoundary>,
+}
+
+impl AgentHandoff {
+    pub(crate) fn push_status(&mut self, status: AgentStatus, mailbox_sequence: u64) {
+        self.sequence += 1;
+        self.status = Some(status.clone());
+        self.recent_statuses.push_back(AgentHandoffBoundary {
+            sequence: self.sequence,
+            mailbox_sequence,
+            status,
+        });
+        if self.recent_statuses.len() > AGENT_HANDOFF_HISTORY_LIMIT {
+            self.recent_statuses.pop_front();
+        }
+    }
+
+    pub(crate) fn first_status_after(&self, sequence: u64) -> Option<AgentStatus> {
+        self.recent_statuses
+            .iter()
+            .find(|boundary| boundary.sequence > sequence)
+            .map(|boundary| boundary.status.clone())
+    }
+
+    pub(crate) fn first_status_at_or_after(&self, sequence: u64) -> Option<AgentStatus> {
+        self.recent_statuses
+            .iter()
+            .find(|boundary| boundary.sequence >= sequence)
+            .map(|boundary| boundary.status.clone())
+    }
+
+    pub(crate) fn first_status_for_mailbox_sequence(
+        &self,
+        mailbox_sequence: u64,
+    ) -> Option<AgentStatus> {
+        self.recent_statuses
+            .iter()
+            .find(|boundary| boundary.mailbox_sequence >= mailbox_sequence)
+            .map(|boundary| boundary.status.clone())
+    }
 }
 
 /// Derive the next agent status from a single emitted event.
@@ -34,4 +85,25 @@ pub(crate) fn is_final(status: &AgentStatus) -> bool {
         status,
         AgentStatus::PendingInit | AgentStatus::Running | AgentStatus::Interrupted
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn handoff_ignores_boundaries_before_requested_mailbox_sequence() {
+        let mut handoff = AgentHandoff::default();
+        handoff.push_status(
+            AgentStatus::Completed(Some("before".to_string())),
+            /*mailbox_sequence*/ 1,
+        );
+        handoff.push_status(AgentStatus::Interrupted, /*mailbox_sequence*/ 2);
+
+        assert_eq!(
+            handoff.first_status_for_mailbox_sequence(/*mailbox_sequence*/ 2),
+            Some(AgentStatus::Interrupted),
+        );
+    }
 }

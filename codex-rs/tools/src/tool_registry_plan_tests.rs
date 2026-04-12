@@ -326,6 +326,41 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
 }
 
 #[test]
+fn test_build_specs_multi_agent_v2_followup_task_includes_status_when_blocking_enabled() {
+    let model_info = model_info();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::Collab);
+    features.enable(Feature::MultiAgentV2);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    })
+    .with_spawn_agent_blocking_enabled(/*spawn_agent_blocking_enabled*/ true);
+    let (tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+
+    let followup_task = find_tool(&tools, "followup_task");
+    let ToolSpec::Function(ResponsesApiTool { output_schema, .. }) = &followup_task.spec else {
+        panic!("followup_task should be a function tool");
+    };
+    let output_schema = output_schema
+        .as_ref()
+        .expect("followup_task should define output schema when blocking is enabled");
+    assert_eq!(output_schema["required"], json!(["status"]));
+}
+
+#[test]
 fn test_build_specs_enable_fanout_enables_agent_jobs_and_collab_tools() {
     let model_info = model_info();
     let mut features = Features::with_defaults();

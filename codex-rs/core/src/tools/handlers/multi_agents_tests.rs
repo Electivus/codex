@@ -54,6 +54,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
+use tokio::sync::watch;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
@@ -251,6 +252,12 @@ struct BlockingSpawnAgentResult {
     status: AgentStatus,
 }
 
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct BlockingFollowupTaskResult {
+    status: AgentStatus,
+}
+
 async fn wait_for_agent_reference(
     session: &Arc<crate::codex::Session>,
     turn: &Arc<TurnContext>,
@@ -271,6 +278,72 @@ async fn wait_for_agent_reference(
     })
     .await
     .expect("agent reference should resolve")
+}
+
+async fn wait_for_mailbox_advance(mailbox_seq_rx: &mut watch::Receiver<u64>, previous_seq: u64) {
+    timeout(Duration::from_secs(5), async {
+        while *mailbox_seq_rx.borrow() == previous_seq {
+            mailbox_seq_rx
+                .changed()
+                .await
+                .expect("worker mailbox should observe the followup message");
+        }
+    })
+    .await
+    .expect("worker mailbox should advance");
+}
+
+async fn spawn_blocking_v2_worker(
+    session: Arc<crate::codex::Session>,
+    turn: Arc<TurnContext>,
+    manager: &ThreadManager,
+    task_name: &str,
+) -> (ThreadId, Arc<CodexThread>) {
+    let spawn_task = tokio::spawn({
+        let session = session.clone();
+        let turn = turn.clone();
+        let task_name = task_name.to_string();
+        async move {
+            SpawnAgentHandlerV2
+                .handle(invocation(
+                    session,
+                    turn,
+                    "spawn_agent",
+                    function_payload(json!({
+                        "message": "boot worker",
+                        "task_name": task_name
+                    })),
+                ))
+                .await
+        }
+    });
+
+    let agent_id = wait_for_agent_reference(&session, &turn, task_name).await;
+    let thread = manager
+        .get_thread(agent_id)
+        .await
+        .expect("worker thread should exist");
+    let completed_turn = thread.codex.session.new_default_turn().await;
+    thread
+        .codex
+        .session
+        .send_event(
+            completed_turn.as_ref(),
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: completed_turn.sub_id.clone(),
+                last_agent_message: Some("spawned".to_string()),
+                completed_at: None,
+                duration_ms: None,
+            }),
+        )
+        .await;
+
+    spawn_task
+        .await
+        .expect("spawn task should join")
+        .expect("spawn worker");
+
+    (agent_id, thread)
 }
 
 #[tokio::test]
@@ -1497,6 +1570,370 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
     .expect("parent should receive one completion notification per child turn");
 
     assert_eq!(notifications.len(), 2);
+}
+
+#[tokio::test]
+async fn multi_agent_v2_followup_task_blocks_until_target_reaches_next_turn_boundary() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.conversation_id = root.thread_id;
+    let mut config = turn.config.as_ref().clone();
+    let _ = config.features.enable(Feature::MultiAgentV2);
+    config.multi_agent_v2.spawn_agent_blocking_enabled = true;
+    turn.config = Arc::new(config);
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+
+    let (agent_id, thread) =
+        spawn_blocking_v2_worker(session.clone(), turn.clone(), &manager, "worker").await;
+    let mut mailbox_seq_rx = thread.codex.session.subscribe_mailbox_seq();
+    let initial_mailbox_seq = *mailbox_seq_rx.borrow();
+
+    let followup_task = tokio::spawn({
+        let session = session.clone();
+        let turn = turn.clone();
+        async move {
+            FollowupTaskHandlerV2
+                .handle(invocation(
+                    session,
+                    turn,
+                    "followup_task",
+                    function_payload(json!({
+                        "target": agent_id.to_string(),
+                        "message": "continue",
+                    })),
+                ))
+                .await
+        }
+    });
+    wait_for_mailbox_advance(&mut mailbox_seq_rx, initial_mailbox_seq).await;
+
+    let completed_turn = thread.codex.session.new_default_turn().await;
+    thread
+        .codex
+        .session
+        .send_event(
+            completed_turn.as_ref(),
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: completed_turn.sub_id.clone(),
+                last_agent_message: Some("done".to_string()),
+                completed_at: None,
+                duration_ms: None,
+            }),
+        )
+        .await;
+
+    let output = timeout(Duration::from_secs(5), followup_task)
+        .await
+        .expect("blocking followup_task should return")
+        .expect("followup task should join")
+        .expect("followup_task should succeed");
+    let (content, success) = expect_text_output(output);
+    let result: BlockingFollowupTaskResult =
+        serde_json::from_str(&content).expect("followup_task result should be json");
+
+    assert_eq!(
+        result,
+        BlockingFollowupTaskResult {
+            status: AgentStatus::Completed(Some("done".to_string())),
+        }
+    );
+    assert_eq!(success, Some(true));
+}
+
+#[tokio::test]
+async fn multi_agent_v2_followup_task_returns_interrupted_status_when_blocking_enabled() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.conversation_id = root.thread_id;
+    let mut config = turn.config.as_ref().clone();
+    let _ = config.features.enable(Feature::MultiAgentV2);
+    config.multi_agent_v2.spawn_agent_blocking_enabled = true;
+    turn.config = Arc::new(config);
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+
+    let (agent_id, thread) =
+        spawn_blocking_v2_worker(session.clone(), turn.clone(), &manager, "worker").await;
+    let mut mailbox_seq_rx = thread.codex.session.subscribe_mailbox_seq();
+    let initial_mailbox_seq = *mailbox_seq_rx.borrow();
+
+    let followup_task = tokio::spawn({
+        let session = session.clone();
+        let turn = turn.clone();
+        async move {
+            FollowupTaskHandlerV2
+                .handle(invocation(
+                    session,
+                    turn,
+                    "followup_task",
+                    function_payload(json!({
+                        "target": agent_id.to_string(),
+                        "message": "continue",
+                        "interrupt": true,
+                    })),
+                ))
+                .await
+        }
+    });
+    wait_for_mailbox_advance(&mut mailbox_seq_rx, initial_mailbox_seq).await;
+
+    let interrupted_turn = thread.codex.session.new_default_turn().await;
+    thread
+        .codex
+        .session
+        .send_event(
+            interrupted_turn.as_ref(),
+            EventMsg::TurnAborted(TurnAbortedEvent {
+                turn_id: Some(interrupted_turn.sub_id.clone()),
+                reason: TurnAbortReason::Interrupted,
+                completed_at: None,
+                duration_ms: None,
+            }),
+        )
+        .await;
+
+    let output = timeout(Duration::from_secs(5), followup_task)
+        .await
+        .expect("blocking followup_task should return")
+        .expect("followup task should join")
+        .expect("followup_task should succeed");
+    let (content, success) = expect_text_output(output);
+    let result: BlockingFollowupTaskResult =
+        serde_json::from_str(&content).expect("followup_task result should be json");
+
+    assert_eq!(
+        result,
+        BlockingFollowupTaskResult {
+            status: AgentStatus::Interrupted,
+        }
+    );
+    assert_eq!(success, Some(true));
+}
+
+#[tokio::test]
+async fn multi_agent_v2_followup_task_returns_first_handoff_status_across_multiple_boundaries() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.conversation_id = root.thread_id;
+    let mut config = turn.config.as_ref().clone();
+    let _ = config.features.enable(Feature::MultiAgentV2);
+    config.multi_agent_v2.spawn_agent_blocking_enabled = true;
+    turn.config = Arc::new(config);
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+
+    let (agent_id, thread) =
+        spawn_blocking_v2_worker(session.clone(), turn.clone(), &manager, "worker").await;
+
+    let active_turn = thread.codex.session.new_default_turn().await;
+    thread
+        .codex
+        .session
+        .send_event(
+            active_turn.as_ref(),
+            EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: active_turn.sub_id.clone(),
+                started_at: None,
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }),
+        )
+        .await;
+    let mut mailbox_seq_rx = thread.codex.session.subscribe_mailbox_seq();
+    let initial_mailbox_seq = *mailbox_seq_rx.borrow();
+
+    let followup_task = tokio::spawn({
+        let session = session.clone();
+        let turn = turn.clone();
+        async move {
+            FollowupTaskHandlerV2
+                .handle(invocation(
+                    session,
+                    turn,
+                    "followup_task",
+                    function_payload(json!({
+                        "target": agent_id.to_string(),
+                        "message": "continue",
+                    })),
+                ))
+                .await
+        }
+    });
+    wait_for_mailbox_advance(&mut mailbox_seq_rx, initial_mailbox_seq).await;
+
+    let completed_turn = thread.codex.session.new_default_turn().await;
+    thread
+        .codex
+        .session
+        .send_event(
+            completed_turn.as_ref(),
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: completed_turn.sub_id.clone(),
+                last_agent_message: Some("done".to_string()),
+                completed_at: None,
+                duration_ms: None,
+            }),
+        )
+        .await;
+    let interrupted_turn = thread.codex.session.new_default_turn().await;
+    thread
+        .codex
+        .session
+        .send_event(
+            interrupted_turn.as_ref(),
+            EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: interrupted_turn.sub_id.clone(),
+                started_at: None,
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }),
+        )
+        .await;
+    thread
+        .codex
+        .session
+        .send_event(
+            interrupted_turn.as_ref(),
+            EventMsg::TurnAborted(TurnAbortedEvent {
+                turn_id: Some(interrupted_turn.sub_id.clone()),
+                reason: TurnAbortReason::Interrupted,
+                completed_at: None,
+                duration_ms: None,
+            }),
+        )
+        .await;
+
+    let output = timeout(Duration::from_secs(5), followup_task)
+        .await
+        .expect("blocking followup_task should return")
+        .expect("followup task should join")
+        .expect("followup_task should succeed");
+    let (content, success) = expect_text_output(output);
+    let result: BlockingFollowupTaskResult =
+        serde_json::from_str(&content).expect("followup_task result should be json");
+
+    assert_eq!(
+        result,
+        BlockingFollowupTaskResult {
+            status: AgentStatus::Completed(Some("done".to_string())),
+        }
+    );
+    assert_eq!(success, Some(true));
+}
+
+#[tokio::test]
+async fn multi_agent_v2_followup_handoff_arm_keeps_existing_boundary_for_older_receivers() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.conversation_id = root.thread_id;
+    let mut config = turn.config.as_ref().clone();
+    let _ = config.features.enable(Feature::MultiAgentV2);
+    config.multi_agent_v2.spawn_agent_blocking_enabled = true;
+    turn.config = Arc::new(config);
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+
+    let (_agent_id, thread) =
+        spawn_blocking_v2_worker(session.clone(), turn.clone(), &manager, "worker").await;
+
+    let first_handoff_rx = thread.codex.session.arm_handoff_status();
+    let completed_turn = thread.codex.session.new_default_turn().await;
+    thread
+        .codex
+        .session
+        .send_event(
+            completed_turn.as_ref(),
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: completed_turn.sub_id.clone(),
+                last_agent_message: Some("done".to_string()),
+                completed_at: None,
+                duration_ms: None,
+            }),
+        )
+        .await;
+
+    assert_eq!(
+        first_handoff_rx.borrow().status,
+        Some(AgentStatus::Completed(Some("done".to_string()))),
+    );
+
+    let second_handoff_rx = thread.codex.session.arm_handoff_status();
+
+    assert_eq!(
+        first_handoff_rx.borrow().status,
+        Some(AgentStatus::Completed(Some("done".to_string()))),
+    );
+    assert_eq!(
+        second_handoff_rx.borrow().status,
+        Some(AgentStatus::Completed(Some("done".to_string()))),
+    );
+}
+
+#[tokio::test]
+async fn multi_agent_v2_followup_task_returns_error_when_handoff_timeout_is_reached() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.conversation_id = root.thread_id;
+    let mut config = turn.config.as_ref().clone();
+    let _ = config.features.enable(Feature::MultiAgentV2);
+    config.multi_agent_v2.spawn_agent_blocking_enabled = true;
+    turn.config = Arc::new(config);
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+
+    let (agent_id, _thread) =
+        spawn_blocking_v2_worker(session.clone(), turn.clone(), &manager, "worker").await;
+
+    let result = timeout(
+        Duration::from_secs(2),
+        FollowupTaskHandlerV2.handle(invocation(
+            session,
+            turn,
+            "followup_task",
+            function_payload(json!({
+                "target": agent_id.to_string(),
+                "message": "continue",
+            })),
+        )),
+    )
+    .await
+    .expect("blocking followup_task should finish");
+
+    let Err(err) = result else {
+        panic!("followup_task should time out");
+    };
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel(format!(
+            "agent `{agent_id}` did not reach its next turn boundary within 500 ms"
+        ),)
+    );
 }
 
 #[tokio::test]

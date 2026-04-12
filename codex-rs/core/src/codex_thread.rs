@@ -138,6 +138,21 @@ impl CodexThread {
         self.codex.agent_handoff.clone()
     }
 
+    pub(crate) fn arm_handoff_status(&self) -> watch::Receiver<AgentHandoff> {
+        self.codex.session.arm_handoff_status()
+    }
+
+    pub(crate) async fn wait_for_inter_agent_mailbox_seq(
+        &self,
+        sub_id: &str,
+        deadline: Option<tokio::time::Instant>,
+    ) -> Option<u64> {
+        self.codex
+            .session
+            .wait_for_inter_agent_mailbox_seq(sub_id, deadline)
+            .await
+    }
+
     pub(crate) async fn total_token_usage(&self) -> Option<TokenUsage> {
         self.codex.session.total_token_usage().await
     }

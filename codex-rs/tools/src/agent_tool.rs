@@ -150,7 +150,7 @@ pub fn create_send_message_tool() -> ToolSpec {
     })
 }
 
-pub fn create_followup_task_tool() -> ToolSpec {
+pub fn create_followup_task_tool(blocking_enabled: bool) -> ToolSpec {
     let properties = BTreeMap::from([
         (
             "target".to_string(),
@@ -175,12 +175,21 @@ pub fn create_followup_task_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "followup_task".to_string(),
-        description: "Send a string message to an existing non-root agent and trigger a turn in the target. Use interrupt=true to redirect work immediately. If interrupt=false and the target's turn has not completed, the message is queued and starts the target's next turn after the current turn completes."
-            .to_string(),
+        description: if blocking_enabled {
+            "Send a string message to an existing non-root agent and trigger a turn in the target. Use interrupt=true to redirect work immediately. If interrupt=false and the target's turn has not completed, the message is queued and starts the target's next turn after the current turn completes. This call waits until the target agent reaches its next turn boundary and returns the observed status from that handoff."
+                .to_string()
+        } else {
+            "Send a string message to an existing non-root agent and trigger a turn in the target. Use interrupt=true to redirect work immediately. If interrupt=false and the target's turn has not completed, the message is queued and starts the target's next turn after the current turn completes."
+                .to_string()
+        },
         strict: false,
         defer_loading: None,
-        parameters: JsonSchema::object(properties, Some(vec!["target".to_string(), "message".to_string()]), Some(false.into())),
-        output_schema: None,
+        parameters: JsonSchema::object(
+            properties,
+            Some(vec!["target".to_string(), "message".to_string()]),
+            Some(false.into()),
+        ),
+        output_schema: blocking_enabled.then(followup_task_output_schema),
     })
 }
 
@@ -443,6 +452,17 @@ fn list_agents_output_schema() -> Value {
 }
 
 fn resume_agent_output_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "status": agent_status_output_schema()
+        },
+        "required": ["status"],
+        "additionalProperties": false
+    })
+}
+
+fn followup_task_output_schema() -> Value {
     json!({
         "type": "object",
         "properties": {

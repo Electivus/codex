@@ -190,18 +190,18 @@ async fn wait_for_request_count(
     request_log: &ResponseMock,
     expected: usize,
     timeout: Duration,
-) -> Vec<core_test_support::responses::ResponsesRequest> {
+) -> Result<Vec<core_test_support::responses::ResponsesRequest>> {
     tokio::time::timeout(timeout, async {
         loop {
             let requests = request_log.requests();
             if requests.len() >= expected {
-                return requests;
+                return Ok(requests);
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
-    .expect("timed out waiting for expected request count")
+    .context("timed out waiting for expected request count")?
 }
 
 async fn create_workspace_directory(
@@ -825,7 +825,8 @@ async fn background_completion_auto_wakes_idle_thread() -> Result<()> {
     )
     .await;
 
-    let requests = wait_for_request_count(&request_log, 3, Duration::from_secs(15)).await;
+    let requests =
+        wait_for_request_count(&request_log, /*expected*/ 3, Duration::from_secs(15)).await?;
     assert_eq!(
         requests.len(),
         3,
@@ -1004,7 +1005,7 @@ async fn background_completion_auto_drops_when_thread_is_active() -> Result<()> 
     )
     .await;
 
-    let _ = wait_for_request_count(&request_log, 4, Duration::from_secs(10)).await;
+    let _ = wait_for_request_count(&request_log, /*expected*/ 4, Duration::from_secs(10)).await?;
     tokio::time::sleep(Duration::from_millis(800)).await;
 
     assert_eq!(
@@ -1121,7 +1122,8 @@ async fn background_completion_wake_queues_after_active_turn_finishes() -> Resul
     )
     .await;
 
-    let requests = wait_for_request_count(&request_log, 5, Duration::from_secs(10)).await;
+    let requests =
+        wait_for_request_count(&request_log, /*expected*/ 5, Duration::from_secs(10)).await?;
     assert_eq!(
         requests.len(),
         5,
