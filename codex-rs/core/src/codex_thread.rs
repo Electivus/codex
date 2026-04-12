@@ -138,6 +138,10 @@ impl CodexThread {
         self.codex.agent_handoff.clone()
     }
 
+    pub(crate) fn arm_handoff_status(&self) -> watch::Receiver<AgentHandoff> {
+        self.codex.session.arm_handoff_status()
+    }
+
     pub(crate) async fn total_token_usage(&self) -> Option<TokenUsage> {
         self.codex.session.total_token_usage().await
     }

@@ -4,7 +4,7 @@
 //! resulting `InterAgentCommunication` should wake the target immediately.
 
 use super::*;
-use crate::agent::status::is_handoff_boundary;
+use crate::agent::AgentHandoff;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::InterAgentCommunication;
 use std::time::Duration;
@@ -126,12 +126,12 @@ async fn handle_message_submission(
     }
     let blocking_enabled = mode == MessageDeliveryMode::TriggerTurn
         && turn.config.multi_agent_v2.spawn_agent_blocking_enabled;
-    let status_rx = if blocking_enabled {
+    let handoff_rx = if blocking_enabled {
         Some(
             session
                 .services
                 .agent_control
-                .subscribe_status(receiver_thread_id)
+                .arm_handoff_status(receiver_thread_id)
                 .await
                 .map_err(|err| collab_agent_error(receiver_thread_id, err))?,
         )
@@ -176,9 +176,10 @@ async fn handle_message_submission(
         .send_inter_agent_communication(receiver_thread_id, mode.apply(communication))
         .await
         .map_err(|err| collab_agent_error(receiver_thread_id, err));
-    let blocking_wait = match (&result, status_rx) {
-        (Ok(_), Some(status_rx)) => Some(
-            wait_for_followup_handoff_status(session.as_ref(), receiver_thread_id, status_rx).await,
+    let blocking_wait = match (&result, handoff_rx) {
+        (Ok(_), Some(handoff_rx)) => Some(
+            wait_for_followup_handoff_status(session.as_ref(), receiver_thread_id, handoff_rx)
+                .await,
         ),
         _ => None,
     };
@@ -224,14 +225,12 @@ async fn handle_message_submission(
 async fn wait_for_followup_handoff_status(
     session: &crate::codex::Session,
     thread_id: ThreadId,
-    mut status_rx: watch::Receiver<AgentStatus>,
+    mut handoff_rx: watch::Receiver<AgentHandoff>,
 ) -> BlockingFollowupHandoffStatus {
     let deadline = BLOCKING_FOLLOWUP_HANDOFF_TIMEOUT.map(|timeout| Instant::now() + timeout);
-    let mut saw_status_change = false;
 
     loop {
-        let status = status_rx.borrow().clone();
-        if saw_status_change && is_handoff_boundary(&status) {
+        if let Some(status) = handoff_rx.borrow().status.clone() {
             return BlockingFollowupHandoffStatus {
                 status,
                 timed_out: false,
@@ -239,10 +238,8 @@ async fn wait_for_followup_handoff_status(
         }
 
         match deadline {
-            Some(deadline) => match timeout_at(deadline, status_rx.changed()).await {
-                Ok(Ok(())) => {
-                    saw_status_change = true;
-                }
+            Some(deadline) => match timeout_at(deadline, handoff_rx.changed()).await {
+                Ok(Ok(())) => {}
                 Ok(Err(_)) => {
                     return BlockingFollowupHandoffStatus {
                         status: session.services.agent_control.get_status(thread_id).await,
@@ -257,13 +254,12 @@ async fn wait_for_followup_handoff_status(
                 }
             },
             None => {
-                if status_rx.changed().await.is_err() {
+                if handoff_rx.changed().await.is_err() {
                     return BlockingFollowupHandoffStatus {
                         status: session.services.agent_control.get_status(thread_id).await,
                         timed_out: false,
                     };
                 }
-                saw_status_change = true;
             }
         }
     }

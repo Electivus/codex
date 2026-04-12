@@ -1302,6 +1302,11 @@ pub(crate) struct AppServerClientMetadata {
 }
 
 impl Session {
+    pub(crate) fn arm_handoff_status(&self) -> watch::Receiver<AgentHandoff> {
+        self.agent_handoff.send_replace(AgentHandoff::default());
+        self.agent_handoff.subscribe()
+    }
+
     pub(crate) async fn app_server_client_metadata(&self) -> AppServerClientMetadata {
         let state = self.state.lock().await;
         AppServerClientMetadata {
