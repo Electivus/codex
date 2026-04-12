@@ -803,6 +803,19 @@ impl AgentControl {
         Ok(thread.arm_handoff_status())
     }
 
+    pub(crate) async fn wait_for_inter_agent_mailbox_seq(
+        &self,
+        agent_id: ThreadId,
+        sub_id: &str,
+        deadline: Option<tokio::time::Instant>,
+    ) -> CodexResult<Option<u64>> {
+        let state = self.upgrade()?;
+        let thread = state.get_thread(agent_id).await?;
+        Ok(thread
+            .wait_for_inter_agent_mailbox_seq(sub_id, deadline)
+            .await)
+    }
+
     pub(crate) async fn get_total_token_usage(&self, agent_id: ThreadId) -> Option<TokenUsage> {
         let Ok(state) = self.upgrade() else {
             return None;

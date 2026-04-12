@@ -157,6 +157,7 @@ use rmcp::model::ReadResourceResult;
 use rmcp::model::RequestId;
 use serde_json::Value;
 use tokio::sync::Mutex;
+use tokio::sync::Notify;
 use tokio::sync::RwLock;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
@@ -848,6 +849,8 @@ pub(crate) struct Session {
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     mailbox: Mailbox,
     mailbox_rx: Mutex<MailboxReceiver>,
+    inter_agent_mailbox_acks: Mutex<HashMap<String, u64>>,
+    inter_agent_mailbox_ack_notify: Notify,
     idle_pending_input: Mutex<Vec<ResponseInputItem>>, // TODO (jif) merge with mailbox!
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
@@ -1304,6 +1307,35 @@ pub(crate) struct AppServerClientMetadata {
 impl Session {
     pub(crate) fn arm_handoff_status(&self) -> watch::Receiver<AgentHandoff> {
         self.agent_handoff.subscribe()
+    }
+
+    pub(crate) async fn record_inter_agent_mailbox_seq(&self, sub_id: String, mailbox_seq: u64) {
+        self.inter_agent_mailbox_acks
+            .lock()
+            .await
+            .insert(sub_id, mailbox_seq);
+        self.inter_agent_mailbox_ack_notify.notify_waiters();
+    }
+
+    pub(crate) async fn wait_for_inter_agent_mailbox_seq(
+        &self,
+        sub_id: &str,
+        deadline: Option<tokio::time::Instant>,
+    ) -> Option<u64> {
+        loop {
+            let notified = self.inter_agent_mailbox_ack_notify.notified();
+            if let Some(mailbox_seq) = self.inter_agent_mailbox_acks.lock().await.remove(sub_id) {
+                return Some(mailbox_seq);
+            }
+            match deadline {
+                Some(deadline) => {
+                    if tokio::time::timeout_at(deadline, notified).await.is_err() {
+                        return None;
+                    }
+                }
+                None => notified.await,
+            }
+        }
     }
 
     pub(crate) async fn app_server_client_metadata(&self) -> AppServerClientMetadata {
@@ -2095,6 +2127,8 @@ impl Session {
             active_turn: Mutex::new(None),
             mailbox,
             mailbox_rx: Mutex::new(mailbox_rx),
+            inter_agent_mailbox_acks: Mutex::new(HashMap::new()),
+            inter_agent_mailbox_ack_notify: Notify::new(),
             idle_pending_input: Mutex::new(Vec::new()),
             guardian_review_session: GuardianReviewSessionManager::default(),
             services,
@@ -2948,7 +2982,7 @@ impl Session {
                 // Retain a short ordered boundary history so independent waiters can resolve
                 // the first handoff boundary after their own baseline sequence.
                 let mut handoff = self.agent_handoff.borrow().clone();
-                handoff.push_status(handoff_status);
+                handoff.push_status(handoff_status, self.mailbox.current_sequence());
                 self.agent_handoff.send_replace(handoff);
             }
         }
@@ -4288,8 +4322,11 @@ impl Session {
         self.mailbox.subscribe()
     }
 
-    pub(crate) fn enqueue_mailbox_communication(&self, communication: InterAgentCommunication) {
-        self.mailbox.send(communication);
+    pub(crate) fn enqueue_mailbox_communication(
+        &self,
+        communication: InterAgentCommunication,
+    ) -> u64 {
+        self.mailbox.send(communication)
     }
 
     pub(crate) async fn has_trigger_turn_mailbox_items(&self) -> bool {
@@ -5140,7 +5177,9 @@ mod handlers {
         communication: InterAgentCommunication,
     ) {
         let trigger_turn = communication.trigger_turn;
-        sess.enqueue_mailbox_communication(communication);
+        let mailbox_seq = sess.enqueue_mailbox_communication(communication);
+        sess.record_inter_agent_mailbox_seq(sub_id.clone(), mailbox_seq)
+            .await;
         if trigger_turn {
             sess.maybe_start_turn_for_pending_work_with_sub_id(sub_id)
                 .await;

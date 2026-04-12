@@ -127,14 +127,14 @@ async fn handle_message_submission(
     let blocking_enabled = mode == MessageDeliveryMode::TriggerTurn
         && turn.config.multi_agent_v2.spawn_agent_blocking_enabled;
     let handoff_wait = if blocking_enabled {
-        let handoff_rx = session
-            .services
-            .agent_control
-            .arm_handoff_status(receiver_thread_id)
-            .await
-            .map_err(|err| collab_agent_error(receiver_thread_id, err))?;
-        let initial_handoff_sequence = handoff_rx.borrow().sequence;
-        Some((handoff_rx, initial_handoff_sequence))
+        Some(
+            session
+                .services
+                .agent_control
+                .arm_handoff_status(receiver_thread_id)
+                .await
+                .map_err(|err| collab_agent_error(receiver_thread_id, err))?,
+        )
     } else {
         None
     };
@@ -177,12 +177,12 @@ async fn handle_message_submission(
         .await
         .map_err(|err| collab_agent_error(receiver_thread_id, err));
     let blocking_wait = match (&result, handoff_wait) {
-        (Ok(_), Some((handoff_rx, initial_handoff_sequence))) => Some(
+        (Ok(submission_id), Some(handoff_rx)) => Some(
             wait_for_followup_handoff_status(
                 session.as_ref(),
                 receiver_thread_id,
                 handoff_rx,
-                initial_handoff_sequence,
+                submission_id,
             )
             .await,
         ),
@@ -231,14 +231,28 @@ async fn wait_for_followup_handoff_status(
     session: &crate::codex::Session,
     thread_id: ThreadId,
     mut handoff_rx: watch::Receiver<AgentHandoff>,
-    initial_handoff_sequence: u64,
+    submission_id: &str,
 ) -> BlockingFollowupHandoffStatus {
     let deadline = BLOCKING_FOLLOWUP_HANDOFF_TIMEOUT.map(|timeout| Instant::now() + timeout);
+    let Some(mailbox_sequence) = session
+        .services
+        .agent_control
+        .wait_for_inter_agent_mailbox_seq(thread_id, submission_id, deadline)
+        .await
+        .ok()
+        .flatten()
+    else {
+        let timed_out = deadline.is_some_and(|deadline| Instant::now() >= deadline);
+        return BlockingFollowupHandoffStatus {
+            status: session.services.agent_control.get_status(thread_id).await,
+            timed_out,
+        };
+    };
 
     loop {
         if let Some(status) = handoff_rx
             .borrow()
-            .first_status_after(initial_handoff_sequence)
+            .first_status_for_mailbox_sequence(mailbox_sequence)
         {
             return BlockingFollowupHandoffStatus {
                 status,
