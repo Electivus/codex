@@ -13,6 +13,7 @@ pub struct SpawnAgentToolOptions<'a> {
     pub hide_agent_type_model_reasoning: bool,
     pub include_usage_hint: bool,
     pub usage_hint_text: Option<String>,
+    pub blocking_enabled: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,6 +67,7 @@ pub fn create_spawn_agent_tool_v2(options: SpawnAgentToolOptions<'_>) -> ToolSpe
         name: "spawn_agent".to_string(),
         description: spawn_agent_tool_description_v2(
             available_models_description.as_deref(),
+            options.blocking_enabled,
             options.include_usage_hint,
             options.usage_hint_text,
         ),
@@ -78,6 +80,7 @@ pub fn create_spawn_agent_tool_v2(options: SpawnAgentToolOptions<'_>) -> ToolSpe
         ),
         output_schema: Some(spawn_agent_output_schema_v2(
             options.hide_agent_type_model_reasoning,
+            options.blocking_enabled,
         )),
     })
 }
@@ -327,8 +330,22 @@ fn spawn_agent_output_schema_v1() -> Value {
     })
 }
 
-fn spawn_agent_output_schema_v2(hide_agent_metadata: bool) -> Value {
+fn spawn_agent_output_schema_v2(hide_agent_metadata: bool, blocking_enabled: bool) -> Value {
     if hide_agent_metadata {
+        if blocking_enabled {
+            return json!({
+                "type": "object",
+                "properties": {
+                    "task_name": {
+                        "type": "string",
+                        "description": "Canonical task name for the spawned agent."
+                    },
+                    "status": agent_status_output_schema()
+                },
+                "required": ["task_name", "status"],
+                "additionalProperties": false
+            });
+        }
         return json!({
             "type": "object",
             "properties": {
@@ -338,6 +355,25 @@ fn spawn_agent_output_schema_v2(hide_agent_metadata: bool) -> Value {
                 }
             },
             "required": ["task_name"],
+            "additionalProperties": false
+        });
+    }
+
+    if blocking_enabled {
+        return json!({
+            "type": "object",
+            "properties": {
+                "task_name": {
+                    "type": "string",
+                    "description": "Canonical task name for the spawned agent."
+                },
+                "nickname": {
+                    "type": ["string", "null"],
+                    "description": "User-facing nickname for the spawned agent when available."
+                },
+                "status": agent_status_output_schema()
+            },
+            "required": ["task_name", "nickname", "status"],
             "additionalProperties": false
         });
     }
@@ -652,20 +688,33 @@ Requests for depth, thoroughness, research, investigation, or detailed codebase 
 
 fn spawn_agent_tool_description_v2(
     available_models_description: Option<&str>,
+    blocking_enabled: bool,
     include_usage_hint: bool,
     usage_hint_text: Option<String>,
 ) -> String {
     let agent_role_guidance = available_models_description.unwrap_or_default();
 
-    let tool_description = format!(
-        r#"
+    let tool_description = if blocking_enabled {
+        format!(
+            r#"
+        {agent_role_guidance}
+        Spawns an agent to work on the specified task. This call waits until the spawned agent reaches its next turn boundary and returns the observed status from that handoff. If your current task is `/root/task1` and you spawn_agent with task_name "task_3" the agent will have canonical task name `/root/task1/task_3`.
+You are then able to refer to this agent as `task_3` or `/root/task1/task_3` interchangeably. However an agent `/root/task2/task_3` would only be able to communicate with this agent via its canonical name `/root/task1/task_3`.
+The spawned agent will have the same tools as you and the ability to spawn its own subagents.
+It will be able to send you and other running agents messages, and it may still send its final answer separately when it fully finishes.
+The new agent's canonical task name will be provided to it along with the message."#
+        )
+    } else {
+        format!(
+            r#"
         {agent_role_guidance}
         Spawns an agent to work on the specified task. If your current task is `/root/task1` and you spawn_agent with task_name "task_3" the agent will have canonical task name `/root/task1/task_3`.
 You are then able to refer to this agent as `task_3` or `/root/task1/task_3` interchangeably. However an agent `/root/task2/task_3` would only be able to communicate with this agent via its canonical name `/root/task1/task_3`.
 The spawned agent will have the same tools as you and the ability to spawn its own subagents.
 It will be able to send you and other running agents messages, and its final answer will be provided to you when it finishes.
 The new agent's canonical task name will be provided to it along with the message."#
-    );
+        )
+    };
 
     if !include_usage_hint {
         return tool_description;

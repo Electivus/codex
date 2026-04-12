@@ -6257,6 +6257,7 @@ enabled = true
 usage_hint_enabled = false
 usage_hint_text = "Custom delegation guidance."
 hide_spawn_agent_metadata = true
+spawn_agent_blocking_enabled = true
 "#,
     )?;
 
@@ -6273,6 +6274,7 @@ hide_spawn_agent_metadata = true
         Some("Custom delegation guidance.")
     );
     assert!(config.multi_agent_v2.hide_spawn_agent_metadata);
+    assert!(config.multi_agent_v2.spawn_agent_blocking_enabled);
 
     Ok(())
 }
@@ -6288,11 +6290,13 @@ async fn profile_multi_agent_v2_config_overrides_base() -> std::io::Result<()> {
 usage_hint_enabled = true
 usage_hint_text = "base hint"
 hide_spawn_agent_metadata = true
+spawn_agent_blocking_enabled = true
 
 [profiles.no_hint.features.multi_agent_v2]
 usage_hint_enabled = false
 usage_hint_text = "profile hint"
 hide_spawn_agent_metadata = false
+spawn_agent_blocking_enabled = false
 "#,
     )?;
 
@@ -6308,6 +6312,7 @@ hide_spawn_agent_metadata = false
         Some("profile hint")
     );
     assert!(!config.multi_agent_v2.hide_spawn_agent_metadata);
+    assert!(!config.multi_agent_v2.spawn_agent_blocking_enabled);
 
     Ok(())
 }

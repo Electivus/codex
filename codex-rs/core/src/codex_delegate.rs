@@ -147,6 +147,7 @@ pub(crate) async fn run_codex_thread_interactive(
         tx_sub: tx_ops,
         rx_event: rx_sub,
         agent_status: codex.agent_status.clone(),
+        agent_handoff: codex.agent_handoff.clone(),
         session: Arc::clone(&codex.session),
         session_loop_termination: codex.session_loop_termination.clone(),
     })
@@ -195,6 +196,7 @@ pub(crate) async fn run_codex_thread_one_shot(
     let (tx_bridge, rx_bridge) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let ops_tx = io.tx_sub.clone();
     let agent_status = io.agent_status.clone();
+    let agent_handoff = io.agent_handoff.clone();
     let session = Arc::clone(&io.session);
     let session_loop_termination = io.session_loop_termination.clone();
     let io_for_bridge = io;
@@ -229,6 +231,7 @@ pub(crate) async fn run_codex_thread_one_shot(
         rx_event: rx_bridge,
         tx_sub: tx_closed,
         agent_status,
+        agent_handoff,
         session,
         session_loop_termination,
     })

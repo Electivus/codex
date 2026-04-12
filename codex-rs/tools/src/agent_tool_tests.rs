@@ -40,6 +40,7 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
         hide_agent_type_model_reasoning: false,
         include_usage_hint: true,
         usage_hint_text: None,
+        blocking_enabled: false,
     });
 
     let ToolSpec::Function(ResponsesApiTool {
@@ -90,6 +91,7 @@ fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
         hide_agent_type_model_reasoning: false,
         include_usage_hint: true,
         usage_hint_text: None,
+        blocking_enabled: false,
     });
 
     let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = tool else {
@@ -106,6 +108,36 @@ fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
 
     assert!(properties.contains_key("fork_context"));
     assert!(!properties.contains_key("fork_turns"));
+}
+
+#[test]
+fn spawn_agent_tool_v2_blocking_output_includes_status() {
+    let tool = create_spawn_agent_tool_v2(SpawnAgentToolOptions {
+        available_models: &[],
+        agent_type_description: "role help".to_string(),
+        hide_agent_type_model_reasoning: false,
+        include_usage_hint: true,
+        usage_hint_text: None,
+        blocking_enabled: true,
+    });
+
+    let ToolSpec::Function(ResponsesApiTool {
+        description,
+        output_schema,
+        ..
+    }) = tool
+    else {
+        panic!("spawn_agent should be a function tool");
+    };
+
+    assert!(
+        description
+            .contains("This call waits until the spawned agent reaches its next turn boundary")
+    );
+    assert_eq!(
+        output_schema.expect("spawn_agent output schema")["required"],
+        json!(["task_name", "nickname", "status"])
+    );
 }
 
 #[test]

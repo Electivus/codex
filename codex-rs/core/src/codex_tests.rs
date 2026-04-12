@@ -2728,6 +2728,8 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
 
     let (tx_event, _rx_event) = async_channel::unbounded();
     let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
+    let (agent_handoff_tx, _agent_handoff_rx) =
+        watch::channel(crate::agent::AgentHandoff::default());
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.clone()));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
     let skills_manager = Arc::new(SkillsManager::new(
@@ -2742,6 +2744,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         Arc::new(ExecPolicyManager::default()),
         tx_event,
         agent_status_tx,
+        agent_handoff_tx,
         InitialHistory::New,
         SessionSource::Exec,
         skills_manager,
@@ -2946,6 +2949,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         conversation_id,
         tx_event,
         agent_status: agent_status_tx,
+        agent_handoff: watch::channel(crate::agent::AgentHandoff::default()).0,
         out_of_band_elicitation_paused: watch::channel(false).0,
         state: Mutex::new(state),
         managed_network_proxy_refresh_lock: Mutex::new(()),
@@ -3119,10 +3123,12 @@ async fn submit_with_id_captures_current_span_trace_context() {
     let (tx_sub, rx_sub) = async_channel::bounded(1);
     let (_tx_event, rx_event) = async_channel::unbounded();
     let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
+    let (_agent_handoff_tx, agent_handoff) = watch::channel(crate::agent::AgentHandoff::default());
     let codex = Codex {
         tx_sub,
         rx_event,
         agent_status,
+        agent_handoff,
         session: Arc::new(session),
         session_loop_termination: completed_session_loop_termination(),
     };
@@ -3423,6 +3429,7 @@ async fn shutdown_and_wait_allows_multiple_waiters() {
     let (tx_sub, rx_sub) = async_channel::bounded(4);
     let (_tx_event, rx_event) = async_channel::unbounded();
     let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
+    let (_agent_handoff_tx, agent_handoff) = watch::channel(crate::agent::AgentHandoff::default());
     let session_loop_handle = tokio::spawn(async move {
         let shutdown: Submission = rx_sub.recv().await.expect("shutdown submission");
         assert_eq!(shutdown.op, Op::Shutdown);
@@ -3432,6 +3439,7 @@ async fn shutdown_and_wait_allows_multiple_waiters() {
         tx_sub,
         rx_event,
         agent_status,
+        agent_handoff,
         session: Arc::new(session),
         session_loop_termination: session_loop_termination_from_handle(session_loop_handle),
     });
@@ -3462,6 +3470,7 @@ async fn shutdown_and_wait_waits_when_shutdown_is_already_in_progress() {
     drop(rx_sub);
     let (_tx_event, rx_event) = async_channel::unbounded();
     let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
+    let (_agent_handoff_tx, agent_handoff) = watch::channel(crate::agent::AgentHandoff::default());
     let (shutdown_complete_tx, shutdown_complete_rx) = tokio::sync::oneshot::channel();
     let session_loop_handle = tokio::spawn(async move {
         let _ = shutdown_complete_rx.await;
@@ -3470,6 +3479,7 @@ async fn shutdown_and_wait_waits_when_shutdown_is_already_in_progress() {
         tx_sub,
         rx_event,
         agent_status,
+        agent_handoff,
         session: Arc::new(session),
         session_loop_termination: session_loop_termination_from_handle(session_loop_handle),
     });
@@ -3500,6 +3510,8 @@ async fn shutdown_and_wait_shuts_down_cached_guardian_subagent() {
     let (parent_tx_sub, parent_rx_sub) = async_channel::bounded(4);
     let (_parent_tx_event, parent_rx_event) = async_channel::unbounded();
     let (_parent_status_tx, parent_agent_status) = watch::channel(AgentStatus::PendingInit);
+    let (_parent_handoff_tx, parent_agent_handoff) =
+        watch::channel(crate::agent::AgentHandoff::default());
     let parent_session_for_loop = Arc::clone(&parent_session);
     let parent_session_loop_handle = tokio::spawn(async move {
         submission_loop(parent_session_for_loop, parent_config, parent_rx_sub).await;
@@ -3508,6 +3520,7 @@ async fn shutdown_and_wait_shuts_down_cached_guardian_subagent() {
         tx_sub: parent_tx_sub,
         rx_event: parent_rx_event,
         agent_status: parent_agent_status,
+        agent_handoff: parent_agent_handoff,
         session: Arc::clone(&parent_session),
         session_loop_termination: session_loop_termination_from_handle(parent_session_loop_handle),
     };
@@ -3516,6 +3529,8 @@ async fn shutdown_and_wait_shuts_down_cached_guardian_subagent() {
     let (child_tx_sub, child_rx_sub) = async_channel::bounded(4);
     let (_child_tx_event, child_rx_event) = async_channel::unbounded();
     let (_child_status_tx, child_agent_status) = watch::channel(AgentStatus::PendingInit);
+    let (_child_handoff_tx, child_agent_handoff) =
+        watch::channel(crate::agent::AgentHandoff::default());
     let (child_shutdown_tx, child_shutdown_rx) = tokio::sync::oneshot::channel();
     let child_session_loop_handle = tokio::spawn(async move {
         let shutdown: Submission = child_rx_sub
@@ -3531,6 +3546,7 @@ async fn shutdown_and_wait_shuts_down_cached_guardian_subagent() {
         tx_sub: child_tx_sub,
         rx_event: child_rx_event,
         agent_status: child_agent_status,
+        agent_handoff: child_agent_handoff,
         session: Arc::new(child_session),
         session_loop_termination: session_loop_termination_from_handle(child_session_loop_handle),
     };
@@ -3557,6 +3573,8 @@ async fn shutdown_and_wait_shuts_down_tracked_ephemeral_guardian_review() {
     let (parent_tx_sub, parent_rx_sub) = async_channel::bounded(4);
     let (_parent_tx_event, parent_rx_event) = async_channel::unbounded();
     let (_parent_status_tx, parent_agent_status) = watch::channel(AgentStatus::PendingInit);
+    let (_parent_handoff_tx, parent_agent_handoff) =
+        watch::channel(crate::agent::AgentHandoff::default());
     let parent_session_for_loop = Arc::clone(&parent_session);
     let parent_session_loop_handle = tokio::spawn(async move {
         submission_loop(parent_session_for_loop, parent_config, parent_rx_sub).await;
@@ -3565,6 +3583,7 @@ async fn shutdown_and_wait_shuts_down_tracked_ephemeral_guardian_review() {
         tx_sub: parent_tx_sub,
         rx_event: parent_rx_event,
         agent_status: parent_agent_status,
+        agent_handoff: parent_agent_handoff,
         session: Arc::clone(&parent_session),
         session_loop_termination: session_loop_termination_from_handle(parent_session_loop_handle),
     };
@@ -3573,6 +3592,8 @@ async fn shutdown_and_wait_shuts_down_tracked_ephemeral_guardian_review() {
     let (child_tx_sub, child_rx_sub) = async_channel::bounded(4);
     let (_child_tx_event, child_rx_event) = async_channel::unbounded();
     let (_child_status_tx, child_agent_status) = watch::channel(AgentStatus::PendingInit);
+    let (_child_handoff_tx, child_agent_handoff) =
+        watch::channel(crate::agent::AgentHandoff::default());
     let (child_shutdown_tx, child_shutdown_rx) = tokio::sync::oneshot::channel();
     let child_session_loop_handle = tokio::spawn(async move {
         let shutdown: Submission = child_rx_sub
@@ -3588,6 +3609,7 @@ async fn shutdown_and_wait_shuts_down_tracked_ephemeral_guardian_review() {
         tx_sub: child_tx_sub,
         rx_event: child_rx_event,
         agent_status: child_agent_status,
+        agent_handoff: child_agent_handoff,
         session: Arc::new(child_session),
         session_loop_termination: session_loop_termination_from_handle(child_session_loop_handle),
     };
@@ -3791,6 +3813,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         conversation_id,
         tx_event,
         agent_status: agent_status_tx,
+        agent_handoff: watch::channel(crate::agent::AgentHandoff::default()).0,
         out_of_band_elicitation_paused: watch::channel(false).0,
         state: Mutex::new(state),
         managed_network_proxy_refresh_lock: Mutex::new(()),

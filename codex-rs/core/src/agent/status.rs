@@ -1,6 +1,12 @@
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::EventMsg;
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct AgentHandoff {
+    pub(crate) sequence: u64,
+    pub(crate) status: Option<AgentStatus>,
+}
+
 /// Derive the next agent status from a single emitted event.
 /// Returns `None` when the event does not affect status tracking.
 pub(crate) fn agent_status_from_event(msg: &EventMsg) -> Option<AgentStatus> {
@@ -17,6 +23,10 @@ pub(crate) fn agent_status_from_event(msg: &EventMsg) -> Option<AgentStatus> {
         EventMsg::ShutdownComplete => Some(AgentStatus::Shutdown),
         _ => None,
     }
+}
+
+pub(crate) fn is_handoff_boundary(status: &AgentStatus) -> bool {
+    !matches!(status, AgentStatus::PendingInit | AgentStatus::Running)
 }
 
 pub(crate) fn is_final(status: &AgentStatus) -> bool {

@@ -696,6 +696,19 @@ fn spawn_agent_description_uses_configured_usage_hint_text() {
 }
 
 #[test]
+fn spawn_agent_description_mentions_turn_boundary_when_blocking_enabled() {
+    let tools_config = multi_agent_v2_tools_config()
+        .with_spawn_agent_blocking_enabled(/*spawn_agent_blocking_enabled*/ true);
+    let description = multi_agent_v2_spawn_agent_description(&tools_config);
+
+    assert!(
+        description
+            .contains("This call waits until the spawned agent reaches its next turn boundary")
+    );
+    assert!(description.contains("returns the observed status from that handoff"));
+}
+
+#[test]
 fn tool_suggest_requires_apps_and_plugins_features() {
     let model_info = search_capable_model_info();
     let discoverable_tools = Some(vec![discoverable_connector(

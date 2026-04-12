@@ -81,6 +81,13 @@ Plan preset. The string value `none` means "no reasoning" (an explicit Plan
 override), not "inherit the global default". There is currently no separate
 config value for "follow the global default in Plan mode".
 
+## Multi-agent V2 spawn blocking
+
+Under `[features.multi_agent_v2]`, `spawn_agent_blocking_enabled = true` makes
+the V2 `spawn_agent` tool wait until the spawned child reaches its next turn
+boundary before returning. When unset or `false`, V2 `spawn_agent` keeps the
+current immediate-return behavior.
+
 ## Memories phase reasoning effort
 
 Under `[memories]`, `extract_reasoning_effort` controls phase-1 rollout

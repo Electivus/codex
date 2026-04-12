@@ -578,6 +578,7 @@ pub struct MultiAgentV2Config {
     pub usage_hint_enabled: bool,
     pub usage_hint_text: Option<String>,
     pub hide_spawn_agent_metadata: bool,
+    pub spawn_agent_blocking_enabled: bool,
 }
 
 impl Default for MultiAgentV2Config {
@@ -586,6 +587,7 @@ impl Default for MultiAgentV2Config {
             usage_hint_enabled: true,
             usage_hint_text: None,
             hide_spawn_agent_metadata: false,
+            spawn_agent_blocking_enabled: false,
         }
     }
 }
@@ -1327,11 +1329,16 @@ fn resolve_multi_agent_v2_config(
         .and_then(|config| config.hide_spawn_agent_metadata)
         .or_else(|| base.and_then(|config| config.hide_spawn_agent_metadata))
         .unwrap_or(default.hide_spawn_agent_metadata);
+    let spawn_agent_blocking_enabled = profile
+        .and_then(|config| config.spawn_agent_blocking_enabled)
+        .or_else(|| base.and_then(|config| config.spawn_agent_blocking_enabled))
+        .unwrap_or(default.spawn_agent_blocking_enabled);
 
     MultiAgentV2Config {
         usage_hint_enabled,
         usage_hint_text,
         hide_spawn_agent_metadata,
+        spawn_agent_blocking_enabled,
     }
 }
 

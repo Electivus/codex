@@ -37,11 +37,13 @@ async fn forward_events_cancelled_while_send_blocked_shuts_down_delegate() {
     let (tx_events, rx_events) = bounded(1);
     let (tx_sub, rx_sub) = bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
+    let (_agent_handoff_tx, agent_handoff) = watch::channel(crate::agent::AgentHandoff::default());
     let (session, ctx, _rx_evt) = crate::codex::make_session_and_context_with_rx().await;
     let codex = Arc::new(Codex {
         tx_sub,
         rx_event: rx_events,
         agent_status,
+        agent_handoff,
         session: Arc::clone(&session),
         session_loop_termination: completed_session_loop_termination(),
     });
@@ -114,11 +116,13 @@ async fn forward_ops_preserves_submission_trace_context() {
     let (tx_sub, rx_sub) = bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (_tx_events, rx_events) = bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
+    let (_agent_handoff_tx, agent_handoff) = watch::channel(crate::agent::AgentHandoff::default());
     let (session, _ctx, _rx_evt) = crate::codex::make_session_and_context_with_rx().await;
     let codex = Arc::new(Codex {
         tx_sub,
         rx_event: rx_events,
         agent_status,
+        agent_handoff,
         session,
         session_loop_termination: completed_session_loop_termination(),
     });
@@ -162,10 +166,12 @@ async fn handle_request_permissions_uses_tool_call_id_for_round_trip() {
     let (tx_sub, rx_sub) = bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (_tx_events, rx_events_child) = bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
+    let (_agent_handoff_tx, agent_handoff) = watch::channel(crate::agent::AgentHandoff::default());
     let codex = Arc::new(Codex {
         tx_sub,
         rx_event: rx_events_child,
         agent_status,
+        agent_handoff,
         session: Arc::clone(&parent_session),
         session_loop_termination: completed_session_loop_termination(),
     });
@@ -258,10 +264,12 @@ async fn handle_exec_approval_uses_call_id_for_guardian_review_and_approval_id_f
     let (tx_sub, rx_sub) = bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (_tx_events, rx_events_child) = bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
+    let (_agent_handoff_tx, agent_handoff) = watch::channel(crate::agent::AgentHandoff::default());
     let codex = Arc::new(Codex {
         tx_sub,
         rx_event: rx_events_child,
         agent_status,
+        agent_handoff,
         session: Arc::clone(&parent_session),
         session_loop_termination: completed_session_loop_termination(),
     });

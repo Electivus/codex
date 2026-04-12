@@ -270,6 +270,7 @@ enabled = true
 usage_hint_enabled = false
 usage_hint_text = "Custom delegation guidance."
 hide_spawn_agent_metadata = true
+spawn_agent_blocking_enabled = true
 "#,
     )
     .expect("features table should deserialize");
@@ -285,6 +286,7 @@ hide_spawn_agent_metadata = true
             usage_hint_enabled: Some(false),
             usage_hint_text: Some("Custom delegation guidance.".to_string()),
             hide_spawn_agent_metadata: Some(true),
+            spawn_agent_blocking_enabled: Some(true),
         }))
     );
 }
@@ -316,6 +318,7 @@ usage_hint_enabled = false
             usage_hint_enabled: Some(false),
             usage_hint_text: None,
             hide_spawn_agent_metadata: None,
+            spawn_agent_blocking_enabled: None,
         }))
     );
 }
