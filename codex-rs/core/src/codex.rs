@@ -1303,7 +1303,6 @@ pub(crate) struct AppServerClientMetadata {
 
 impl Session {
     pub(crate) fn arm_handoff_status(&self) -> watch::Receiver<AgentHandoff> {
-        self.agent_handoff.send_replace(AgentHandoff::default());
         self.agent_handoff.subscribe()
     }
 
@@ -2946,15 +2945,11 @@ impl Session {
             let handoff_status = status.clone();
             self.agent_status.send_replace(status);
             if is_handoff_boundary(&handoff_status) {
-                let handoff = self.agent_handoff.borrow().clone();
-                if handoff.sequence == 0 {
-                    // Preserve the first observed handoff boundary so blocking spawn can still
-                    // return it after the child immediately starts a later turn.
-                    self.agent_handoff.send_replace(AgentHandoff {
-                        sequence: 1,
-                        status: Some(handoff_status),
-                    });
-                }
+                // Retain a short ordered boundary history so independent waiters can resolve
+                // the first handoff boundary after their own baseline sequence.
+                let mut handoff = self.agent_handoff.borrow().clone();
+                handoff.push_status(handoff_status);
+                self.agent_handoff.send_replace(handoff);
             }
         }
         if let Err(e) = self.tx_event.send(event).await {

@@ -284,8 +284,11 @@ async fn wait_for_spawn_handoff_status(
     loop {
         if let Some(rx) = handoff_rx.as_mut()
             && let handoff = rx.borrow().clone()
-            && (handoff.sequence > initial_handoff_sequence || initial_handoff_sequence > 0)
-            && let Some(status) = handoff.status
+            && let Some(status) = if initial_handoff_sequence > 0 {
+                handoff.first_status_at_or_after(initial_handoff_sequence)
+            } else {
+                handoff.first_status_after(initial_handoff_sequence)
+            }
         {
             return BlockingSpawnHandoffStatus {
                 status,

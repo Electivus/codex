@@ -1838,6 +1838,59 @@ async fn multi_agent_v2_followup_task_returns_first_handoff_status_across_multip
 }
 
 #[tokio::test]
+async fn multi_agent_v2_followup_handoff_arm_keeps_existing_boundary_for_older_receivers() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.conversation_id = root.thread_id;
+    let mut config = turn.config.as_ref().clone();
+    let _ = config.features.enable(Feature::MultiAgentV2);
+    config.multi_agent_v2.spawn_agent_blocking_enabled = true;
+    turn.config = Arc::new(config);
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+
+    let (_agent_id, thread) =
+        spawn_blocking_v2_worker(session.clone(), turn.clone(), &manager, "worker").await;
+
+    let first_handoff_rx = thread.codex.session.arm_handoff_status();
+    let completed_turn = thread.codex.session.new_default_turn().await;
+    thread
+        .codex
+        .session
+        .send_event(
+            completed_turn.as_ref(),
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: completed_turn.sub_id.clone(),
+                last_agent_message: Some("done".to_string()),
+                completed_at: None,
+                duration_ms: None,
+            }),
+        )
+        .await;
+
+    assert_eq!(
+        first_handoff_rx.borrow().status,
+        Some(AgentStatus::Completed(Some("done".to_string()))),
+    );
+
+    let second_handoff_rx = thread.codex.session.arm_handoff_status();
+
+    assert_eq!(
+        first_handoff_rx.borrow().status,
+        Some(AgentStatus::Completed(Some("done".to_string()))),
+    );
+    assert_eq!(
+        second_handoff_rx.borrow().status,
+        Some(AgentStatus::Completed(Some("done".to_string()))),
+    );
+}
+
+#[tokio::test]
 async fn multi_agent_v2_followup_task_returns_error_when_handoff_timeout_is_reached() {
     let (mut session, mut turn) = make_session_and_context().await;
     let manager = thread_manager();

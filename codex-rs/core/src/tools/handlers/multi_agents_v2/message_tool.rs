@@ -126,15 +126,15 @@ async fn handle_message_submission(
     }
     let blocking_enabled = mode == MessageDeliveryMode::TriggerTurn
         && turn.config.multi_agent_v2.spawn_agent_blocking_enabled;
-    let handoff_rx = if blocking_enabled {
-        Some(
-            session
-                .services
-                .agent_control
-                .arm_handoff_status(receiver_thread_id)
-                .await
-                .map_err(|err| collab_agent_error(receiver_thread_id, err))?,
-        )
+    let handoff_wait = if blocking_enabled {
+        let handoff_rx = session
+            .services
+            .agent_control
+            .arm_handoff_status(receiver_thread_id)
+            .await
+            .map_err(|err| collab_agent_error(receiver_thread_id, err))?;
+        let initial_handoff_sequence = handoff_rx.borrow().sequence;
+        Some((handoff_rx, initial_handoff_sequence))
     } else {
         None
     };
@@ -176,10 +176,15 @@ async fn handle_message_submission(
         .send_inter_agent_communication(receiver_thread_id, mode.apply(communication))
         .await
         .map_err(|err| collab_agent_error(receiver_thread_id, err));
-    let blocking_wait = match (&result, handoff_rx) {
-        (Ok(_), Some(handoff_rx)) => Some(
-            wait_for_followup_handoff_status(session.as_ref(), receiver_thread_id, handoff_rx)
-                .await,
+    let blocking_wait = match (&result, handoff_wait) {
+        (Ok(_), Some((handoff_rx, initial_handoff_sequence))) => Some(
+            wait_for_followup_handoff_status(
+                session.as_ref(),
+                receiver_thread_id,
+                handoff_rx,
+                initial_handoff_sequence,
+            )
+            .await,
         ),
         _ => None,
     };
@@ -226,11 +231,15 @@ async fn wait_for_followup_handoff_status(
     session: &crate::codex::Session,
     thread_id: ThreadId,
     mut handoff_rx: watch::Receiver<AgentHandoff>,
+    initial_handoff_sequence: u64,
 ) -> BlockingFollowupHandoffStatus {
     let deadline = BLOCKING_FOLLOWUP_HANDOFF_TIMEOUT.map(|timeout| Instant::now() + timeout);
 
     loop {
-        if let Some(status) = handoff_rx.borrow().status.clone() {
+        if let Some(status) = handoff_rx
+            .borrow()
+            .first_status_after(initial_handoff_sequence)
+        {
             return BlockingFollowupHandoffStatus {
                 status,
                 timed_out: false,
